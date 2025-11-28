@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+sqlalchemy
+requests
+python-dotenv
+jinja2
+python-multipart
+openai
+psycopg2-binary
