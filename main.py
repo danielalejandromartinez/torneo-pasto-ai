@@ -28,28 +28,20 @@ def enviar_respuesta_whatsapp(numero: str, texto: str):
     phone_id = os.getenv("WHATSAPP_PHONE_ID") 
     
     url = f"https://graph.facebook.com/v17.0/{phone_id}/messages"
-    
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json"
     }
-    
     data = {
         "messaging_product": "whatsapp",
         "to": numero,
         "type": "text",
         "text": {"body": texto}
     }
-    
     try:
-        response = requests.post(url, headers=headers, json=data)
-        response.raise_for_status()
-        # Si sale esto en los logs, es que funcionó:
-        print(f"✅ MENSAJE ENVIADO A META EXITOSAMENTE: {numero}")
+        requests.post(url, headers=headers, json=data)
     except Exception as e:
-        print(f"❌ ERROR ENVIANDO A META: {e}")
-        print(f"Detalle: {response.text if 'response' in locals() else 'No response'}")
-
+        print(f"❌ Error enviando a Meta: {e}")
 
 # RUTA 1: Dashboard
 @app.get("/")
@@ -67,62 +59,69 @@ def ver_dashboard(request: Request, db: Session = Depends(get_db)):
 def verificar_token(request: Request):
     verify_token = os.getenv("VERIFY_TOKEN", "pasto_ai_secreto")
     params = request.query_params
-    mode = params.get("hub.mode")
-    token = params.get("hub.verify_token")
-    challenge = params.get("hub.challenge")
-
-    if mode and token:
-        if mode == "subscribe" and token == verify_token:
-            return PlainTextResponse(content=challenge, status_code=200)
-        else:
-            raise HTTPException(status_code=403, detail="Token incorrecto")
+    if params.get("hub.mode") == "subscribe" and params.get("hub.verify_token") == verify_token:
+        return PlainTextResponse(content=params.get("hub.challenge"), status_code=200)
     return {"status": "ok"}
 
 # RUTA 3: Recibir Mensajes (POST)
 @app.post("/webhook")
 async def recibir_mensaje(request: Request, db: Session = Depends(get_db)):
     data = await request.json()
-    
     try:
-        entry = data["entry"][0]
-        changes = entry["changes"][0]
-        value = changes["value"]
-        
+        value = data["entry"][0]["changes"][0]["value"]
         if "messages" in value:
-            mensaje_obj = value["messages"][0]
-            
-            if mensaje_obj["type"] != "text":
-                return {"status": "ignored"}
+            msg = value["messages"][0]
+            if msg["type"] == "text":
+                texto = msg["text"]["body"]
+                numero = msg["from"]
+                nombre = value["contacts"][0]["profile"]["name"]
 
-            texto_recibido = mensaje_obj["text"]["body"]
-            numero_usuario = mensaje_obj["from"] 
-            nombre_usuario = value["contacts"][0]["profile"]["name"]
+                print(f"📩 MENSAJE: {texto} de {nombre}")
 
-            print(f"📩 MENSAJE RECIBIDO: {texto_recibido} de {nombre_usuario}")
-
-            # --- LÓGICA DE IA ---
-            analisis = analizar_mensaje_ia(texto_recibido)
-            respuesta_final = ""
-
-            if analisis["intencion"] == "reportar_victoria":
-                ganador = analisis["ganador"]
-                if ganador.lower() in ["yo", "mi", "mí"]:
-                    ganador = nombre_usuario
+                # --- IA ---
+                analisis = analizar_mensaje_ia(texto)
                 
-                resultado_db = registrar_victoria(
-                    db, 
-                    nombre_ganador=ganador, 
-                    sets_ganador=analisis["sets_ganador"], 
-                    sets_perdedor=analisis["sets_perdedor"]
-                )
-                respuesta_final = resultado_db
-            else:
-                respuesta_final = analisis.get("respuesta", "No entendí.")
-            
-            # --- AQUÍ ESTÁ LA MAGIA: RESPONDER ---
-            enviar_respuesta_whatsapp(numero_usuario, respuesta_final)
-
+                if analisis["intencion"] == "reportar_victoria":
+                    ganador = analisis["ganador"]
+                    # Si la IA dice que ganó "Yo", usamos el nombre del perfil de WhatsApp
+                    if ganador.lower() in ["yo", "mi", "mí"]:
+                        ganador = nombre
+                    
+                    # Intentamos registrar
+                    respuesta = registrar_victoria(
+                        db, 
+                        nombre_ganador=ganador, 
+                        sets_ganador=analisis["sets_ganador"], 
+                        sets_perdedor=analisis["sets_perdedor"]
+                    )
+                else:
+                    respuesta = analisis.get("respuesta", "No entendí.")
+                
+                enviar_respuesta_whatsapp(numero, respuesta)
     except Exception as e:
-        print(f"⚠️ Error procesando mensaje: {e}")
-
+        print(f"⚠️ Error: {e}")
     return {"status": "received"}
+
+# --- RUTA MÁGICA: CREAR JUGADORES (SOLO ÚSALA UNA VEZ) ---
+@app.get("/semilla")
+def crear_datos_semilla(db: Session = Depends(get_db)):
+    # 1. Crear a Daniel (Tú) - Asegúrate que el nombre sea EXACTO al de tu WhatsApp
+    # En tu pantallazo vi que tu error dice "Daniel Martinez", así que usamos ese.
+    daniel = models.Jugador(nombre="Daniel Martinez", ranking_inicial=1500, grupo="A")
+    juan = models.Jugador(nombre="Juan", ranking_inicial=1400, grupo="A")
+    
+    db.add(daniel)
+    db.add(juan)
+    db.commit()
+    db.refresh(daniel)
+    db.refresh(juan)
+
+    # 2. Crear partido pendiente
+    partido = models.Partido(
+        jugador_1_id=daniel.id, jugador_2_id=juan.id, 
+        fase="Grupos", grupo="A", estado="pendiente", cancha="1"
+    )
+    db.add(partido)
+    db.commit()
+    
+    return {"mensaje": "✅ ¡Daniel Martinez y Juan creados! Ya puedes reportar victoria."}
