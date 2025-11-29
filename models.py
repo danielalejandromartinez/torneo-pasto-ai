@@ -1,41 +1,37 @@
-from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, DateTime
-from sqlalchemy.orm import relationship
+from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime
 from database import Base
-import datetime
+from datetime import datetime
 
 class Jugador(Base):
     __tablename__ = "jugadores"
 
     id = Column(Integer, primary_key=True, index=True)
     nombre = Column(String, index=True)
-    telefono = Column(String, unique=True, index=True) # El ID de WhatsApp
-    ranking_inicial = Column(Integer, default=0) # Ranking con el que entra al torneo
+    celular = Column(String, unique=True, index=True) # ID único de WhatsApp
     
-    # Estadísticas para la Fase de Grupos
-    grupo = Column(String, nullable=True) # Ejemplo: "A", "B", "C"
-    puntos = Column(Integer, default=0) # 3 ganar, 1 perder
+    # Sistema de Puntos Simplificado (Base 100)
+    puntos = Column(Integer, default=100) 
+    categoria = Column(String, default="Novatos")
+    
+    # Estadísticas
     partidos_jugados = Column(Integer, default=0)
-    sets_ganados = Column(Integer, default=0)
-    sets_perdidos = Column(Integer, default=0)
+    victorias = Column(Integer, default=0)
+    derrotas = Column(Integer, default=0)
 
 class Partido(Base):
     __tablename__ = "partidos"
 
     id = Column(Integer, primary_key=True, index=True)
     
-    # Quiénes juegan (Relaciones)
     jugador_1_id = Column(Integer, ForeignKey("jugadores.id"))
+    jugador_1_nombre = Column(String)
     jugador_2_id = Column(Integer, ForeignKey("jugadores.id"))
+    jugador_2_nombre = Column(String)
     
-    jugador_1 = relationship("Jugador", foreign_keys=[jugador_1_id])
-    jugador_2 = relationship("Jugador", foreign_keys=[jugador_2_id])
+    estado = Column(String, default="pendiente") # pendiente, finalizado
+    ganador_id = Column(Integer, nullable=True)
+    marcador = Column(String, nullable=True) # Ej: "3-1"
     
-    # Detalles del partido
-    fase = Column(String) # "Grupo", "Octavos", "Cuartos", "Final"
-    grupo = Column(String, nullable=True) # Solo si es fase de grupos
-    
-    marcador_sets = Column(String, default="0-0") # Ejemplo "3-1"
-    ganador_id = Column(Integer, ForeignKey("jugadores.id"), nullable=True)
-    
-    estado = Column(String, default="pendiente") # "pendiente", "finalizado"
-    cancha = Column(String, nullable=True) # "Cancha 1"
+    # Programación
+    cancha = Column(String, default="Por definir")
+    hora = Column(String, default="Por definir")
