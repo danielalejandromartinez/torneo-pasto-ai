@@ -1,5 +1,7 @@
 import os
+import requests 
 from fastapi import FastAPI, Request, Depends, HTTPException
+from fastapi.responses import PlainTextResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 from database import SessionLocal, engine
@@ -20,28 +22,50 @@ def get_db():
     finally:
         db.close()
 
-# RUTA 1: El Dashboard (TV)
+# --- FUNCION PARA RESPONDER A WHATSAPP ---
+def enviar_respuesta_whatsapp(numero: str, texto: str):
+    token = os.getenv("WHATSAPP_TOKEN")
+    phone_id = os.getenv("WHATSAPP_PHONE_ID") 
+    
+    url = f"https://graph.facebook.com/v17.0/{phone_id}/messages"
+    
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+    
+    data = {
+        "messaging_product": "whatsapp",
+        "to": numero,
+        "type": "text",
+        "text": {"body": texto}
+    }
+    
+    try:
+        response = requests.post(url, headers=headers, json=data)
+        response.raise_for_status()
+        # Si sale esto en los logs, es que funcionó:
+        print(f"✅ MENSAJE ENVIADO A META EXITOSAMENTE: {numero}")
+    except Exception as e:
+        print(f"❌ ERROR ENVIANDO A META: {e}")
+        print(f"Detalle: {response.text if 'response' in locals() else 'No response'}")
+
+
+# RUTA 1: Dashboard
 @app.get("/")
 def ver_dashboard(request: Request, db: Session = Depends(get_db)):
     jugadores = db.query(models.Jugador).order_by(models.Jugador.ranking_inicial.desc()).all()
     partidos = db.query(models.Partido).all()
-    
     return templates.TemplateResponse("ranking.html", {
         "request": request, 
         "jugadores": jugadores,
         "partidos": partidos
     })
 
-# RUTA 2: Verificación de WhatsApp (GET) - ¡NUEVO!
+# RUTA 2: Verificación (GET)
 @app.get("/webhook")
 def verificar_token(request: Request):
-    """
-    Meta envía una petición GET para verificar que somos nosotros.
-    Debemos devolver el 'hub.challenge' si el token coincide.
-    """
     verify_token = os.getenv("VERIFY_TOKEN", "pasto_ai_secreto")
-    
-    # Capturamos los parámetros de la URL
     params = request.query_params
     mode = params.get("hub.mode")
     token = params.get("hub.verify_token")
@@ -49,12 +73,9 @@ def verificar_token(request: Request):
 
     if mode and token:
         if mode == "subscribe" and token == verify_token:
-            print("✅ Webhook verificado exitosamente.")
-            # Importante: Devolver el challenge como texto plano (int)
-            return int(challenge)
+            return PlainTextResponse(content=challenge, status_code=200)
         else:
             raise HTTPException(status_code=403, detail="Token incorrecto")
-    
     return {"status": "ok"}
 
 # RUTA 3: Recibir Mensajes (POST)
@@ -62,7 +83,6 @@ def verificar_token(request: Request):
 async def recibir_mensaje(request: Request, db: Session = Depends(get_db)):
     data = await request.json()
     
-    # Estructura REAL de WhatsApp (es compleja)
     try:
         entry = data["entry"][0]
         changes = entry["changes"][0]
@@ -70,13 +90,15 @@ async def recibir_mensaje(request: Request, db: Session = Depends(get_db)):
         
         if "messages" in value:
             mensaje_obj = value["messages"][0]
+            
+            if mensaje_obj["type"] != "text":
+                return {"status": "ignored"}
+
             texto_recibido = mensaje_obj["text"]["body"]
-            # El número viene como "57300..."
             numero_usuario = mensaje_obj["from"] 
-            # Intentamos obtener el nombre del perfil, si no, usamos el número
             nombre_usuario = value["contacts"][0]["profile"]["name"]
 
-            print(f"📩 WhatsApp Real: {texto_recibido} de {nombre_usuario}")
+            print(f"📩 MENSAJE RECIBIDO: {texto_recibido} de {nombre_usuario}")
 
             # --- LÓGICA DE IA ---
             analisis = analizar_mensaje_ia(texto_recibido)
@@ -97,11 +119,10 @@ async def recibir_mensaje(request: Request, db: Session = Depends(get_db)):
             else:
                 respuesta_final = analisis.get("respuesta", "No entendí.")
             
-            # AQUÍ FALTARÍA EL CÓDIGO PARA RESPONDERLE AL WHATSAPP DEL USUARIO
-            # (Por ahora solo imprimimos en consola para no complicar el deploy)
-            print(f"🤖 Respuesta del Bot: {respuesta_final}")
+            # --- AQUÍ ESTÁ LA MAGIA: RESPONDER ---
+            enviar_respuesta_whatsapp(numero_usuario, respuesta_final)
 
     except Exception as e:
-        print(f"⚠️ Evento no manejado o error: {e}")
+        print(f"⚠️ Error procesando mensaje: {e}")
 
     return {"status": "received"}
