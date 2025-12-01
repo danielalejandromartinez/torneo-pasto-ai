@@ -8,8 +8,6 @@ from sqlalchemy.orm import Session
 from database import SessionLocal, engine
 import models
 from ai_agent import analizar_mensaje_ia
-# Asegúrate de importar la nueva función consultar_estadisticas_torneo si la creaste en logic, 
-# o usar obtener_estado_torneo que es la que definimos antes.
 from logic import (
     inscribir_jugador, generar_partidos_automaticos, consultar_proximo_partido, 
     registrar_victoria, obtener_estado_torneo, obtener_configuracion, 
@@ -31,19 +29,16 @@ def enviar_whatsapp(numero, texto):
         phone_id = os.getenv("WHATSAPP_PHONE_ID")
         url = f"https://graph.facebook.com/v17.0/{phone_id}/messages"
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-        texto_firmado = f"{texto}\n\n_Alejandro • Pasto.AI_"
-        data = {"messaging_product": "whatsapp", "to": numero, "type": "text", "text": {"body": texto_firmado}}
         
-        print(f"📤 INTENTANDO ENVIAR A {numero}...") # Debug
-        response = requests.post(url, headers=headers, json=data)
-        
-        if response.status_code == 200:
-            print("✅ MENSAJE ENVIADO CON ÉXITO")
-        else:
-            print(f"❌ ERROR META: {response.status_code} - {response.text}")
+        # Firma solo si es un mensaje largo o informativo, para no cansar en chat rápido
+        if len(texto) > 50:
+            texto += "\n\n_Alejandro • Pasto.AI_"
             
+        data = {"messaging_product": "whatsapp", "to": numero, "type": "text", "text": {"body": texto}}
+        print(f"📤 Enviando a {numero}: {texto[:50]}...") 
+        requests.post(url, headers=headers, json=data)
     except Exception as e:
-        print(f"❌ Error crítico WhatsApp: {e}")
+        print(f"❌ Error WhatsApp: {e}")
 
 @app.get("/")
 def dashboard(request: Request, db: Session = Depends(get_db)):
@@ -71,69 +66,72 @@ async def recibir(request: Request, db: Session = Depends(get_db)):
                 texto = msg["text"]["body"]
                 numero = msg["from"]
                 
-                # Nombre seguro
+                # Nombre
                 nombre_wa = "Jugador"
                 if "contacts" in value:
                     nombre_wa = value["contacts"][0]["profile"]["name"]
 
-                print(f"📩 RECIBIDO DE: {nombre_wa} ({numero}) MSG: {texto}")
+                print(f"📩 {nombre_wa}: {texto}")
                 
-                # --- VERIFICACIÓN DE ADMIN ---
-                admin_real = os.getenv("ADMIN_PHONE")
-                es_admin = str(numero) == str(admin_real)
-                print(f"👮 ES ADMIN: {es_admin} (Esperaba: {admin_real}, Llegó: {numero})")
-
-                # --- CEREBRO ---
+                # 1. OBTENER CONTEXTO
                 contexto = obtener_configuracion(db)
+
+                # 2. CEREBRO IA (Híbrido)
                 analisis = analizar_mensaje_ia(texto, contexto)
-                intencion = analisis.get("intencion")
-                print(f"🧠 INTENCIÓN: {intencion}")
+                accion = analisis.get("accion")
+                print(f"🧠 ACCIÓN DETECTADA: {accion}")
                 
                 respuesta = ""
+                es_admin = str(numero) == str(os.getenv("ADMIN_PHONE"))
 
-                # --- ACCIONES ---
-                if intencion == "admin_configurar":
-                    if es_admin:
-                        respuesta = actualizar_configuracion(db, analisis.get("clave"), analisis.get("valor"))
-                    else:
-                        respuesta = "❌ No tienes permisos de administrador."
+                # --- CASO A: ES UNA CONVERSACIÓN NATURAL ---
+                if accion == "conversacion":
+                    respuesta = analisis.get("respuesta_ia")
 
-                elif intencion == "admin_difusion":
-                    if es_admin:
-                        respuesta = enviar_difusion_masiva(db, analisis.get("mensaje"))
-                    else:
-                        respuesta = "❌ No tienes permisos."
-
-                elif intencion == "inscripcion":
-                    nombre_real = analisis.get("nombre", nombre_wa)
-                    if not nombre_real or nombre_real == "Jugador": nombre_real = nombre_wa
+                # --- CASO B: ES UNA ACCIÓN DE BASE DE DATOS ---
+                elif accion == "inscripcion":
+                    datos = analisis.get("datos", {})
+                    nombre_real = datos.get("nombre", nombre_wa)
+                    if nombre_real == "Jugador": nombre_real = nombre_wa
                     respuesta = inscribir_jugador(db, nombre_real, numero)
                 
-                elif intencion == "consultar_estado":
-                    # Aquí responde con la info de la base de datos (Contexto)
-                    if not contexto or "Aún no hay reglas" in contexto:
-                        respuesta = obtener_estado_torneo(db) # Info genérica si no hay reglas
-                    else:
-                        respuesta = f"ℹ️ **Información Oficial:**\n\n{contexto}"
+                elif accion == "consultar_inscritos":
+                    # Aquí combinamos el dato duro con charla
+                    respuesta = obtener_estado_torneo(db)
 
-                elif intencion == "consulta_inscritos":
-                     # Usamos la función de estado que cuenta gente
-                     respuesta = obtener_estado_torneo(db)
-
-                elif intencion == "consultar_partido":
+                elif accion == "consultar_partido":
                     respuesta = consultar_proximo_partido(db, numero)
                 
-                elif intencion == "reportar_victoria":
-                    respuesta = registrar_victoria(db, numero, analisis.get("sets_ganador", 3), analisis.get("sets_perdedor", 0))
-                
-                else:
-                    respuesta = analisis.get("respuesta", "No entendí.")
+                elif accion == "reportar_victoria":
+                    datos = analisis.get("datos", {})
+                    respuesta = registrar_victoria(db, numero, datos.get("sets_ganador", 3), datos.get("sets_perdedor", 0))
 
-                print(f"🤖 RESPUESTA A ENVIAR: {respuesta}")
+                # --- ACCIONES ADMIN ---
+                elif accion == "admin_configurar":
+                    if es_admin:
+                        datos = analisis.get("datos", {})
+                        respuesta = actualizar_configuracion(db, datos.get("clave"), datos.get("valor"))
+                    else:
+                        respuesta = "❌ Solo Daniel puede configurar esto."
+
+                elif accion == "admin_difusion":
+                    if es_admin:
+                        datos = analisis.get("datos", {})
+                        respuesta = enviar_difusion_masiva(db, datos.get("mensaje"))
+                    else:
+                        respuesta = "❌ Acceso denegado."
+
+                elif accion == "admin_iniciar":
+                    if es_admin:
+                        respuesta = generar_partidos_automaticos(db)
+                    else:
+                        respuesta = "❌ Esperando orden del administrador."
+
+                # --- ENVIAR ---
                 enviar_whatsapp(numero, respuesta)
 
     except Exception as e:
-        print(f"🔥 ERROR SERVIDOR: {e}")
+        print(f"🔥 Error Servidor: {e}")
         traceback.print_exc()
         
     return {"status": "ok"}

@@ -7,49 +7,67 @@ load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 def analizar_mensaje_ia(texto_usuario: str, contexto_reglas: str):
-    prompt = f"""
-    Eres Alejandro, el Agente IA del Circuito Pasto.AI.
+    """
+    Decide si el usuario quiere ejecutar una acción (JSON) o solo conversar (Texto).
+    """
     
-    INFORMACIÓN ACTUAL DEL TORNEO (Tu memoria):
+    prompt = f"""
+    Eres ALEJANDRO, el Agente IA Oficial de la empresa Pasto.AI y organizador del Circuito de Squash en el Club Colombia.
+    
+    TUS DATOS DE CONTEXTO ACTUAL (Usa esto para responder preguntas):
     {contexto_reglas}
-    (Si la información arriba está vacía o dice 'None', di que aún no hay fechas definidas).
+    
+    TU PERSONALIDAD:
+    - Eres súper amigable, usas emojis 🎾👋, y hablas fluido (estilo colombiano profesional).
+    - NO pareces un robot. No repites frases.
+    - Si te preguntan qué es Pasto.AI: Explica que es una empresa de Inteligencia Artificial que crea agentes para médicos y empresas (SaaS), y que tú eres la prueba viviente de que funciona.
+    - Si te preguntan "Qué torneo?", explica que es el Circuito Oficial de Squash del Club Colombia gestionado por ti.
 
-    TU MISIÓN: Clasificar la intención del usuario.
+    TU MISIÓN (PROCESO DE PENSAMIENTO):
+    Analiza la frase del usuario.
+    
+    A. ¿QUIERE UNA ACCIÓN EN LA BASE DE DATOS?
+       Si quiere inscribirse, ver su partido, reportar resultado o configurar (admin).
+       -> RESPONDE SOLO UN JSON con la estructura: {{ "accion": "nombre_accion", "datos": {{...}} }}
+       
+       Las acciones válidas son:
+       1. "inscripcion": {{ "nombre": "Nombre detectado" }}
+       2. "consultar_partido": {{ }} (Para saber contra quién va)
+       3. "consultar_inscritos": {{ }} (Para saber cuántos hay)
+       4. "reportar_victoria": {{ "sets_ganador": 3, "sets_perdedor": X }}
+       5. "admin_configurar": {{ "clave": "...", "valor": "..." }} (Solo si parece orden de jefe)
+       6. "admin_difusion": {{ "mensaje": "..." }}
+       7. "admin_iniciar": {{ }}
 
-    1. "admin_configurar" (SOLO JEFE):
-       - Frases: "Configurar [clave] es [valor]", "Cambiar fecha a mañana".
-       - JSON: {{ "intencion": "admin_configurar", "clave": "ej: fecha_inicio", "valor": "ej: Lunes" }}
-
-    2. "admin_difusion" (SOLO JEFE):
-       - Frases: "Enviar mensaje a todos: [texto]".
-       - JSON: {{ "intencion": "admin_difusion", "mensaje": "texto a enviar" }}
-
-    3. "consultar_estado" (PREGUNTAS DEL TORNEO):
-       - Frases: "¿Cuándo inicia?", "¿Cuánto vale?", "¿Premios?", "¿Qué hay de premios?", "Horarios".
-       - JSON: {{ "intencion": "consultar_estado" }}
-
-    4. "consulta_inscritos" (ESTADÍSTICAS):
-       - Frases: "¿Cuántos inscritos hay?", "¿Cuánta gente va?", "Estadísticas".
-       - JSON: {{ "intencion": "consulta_inscritos" }}
-
-    5. "inscripcion":
-       - Frases: "Quiero inscribirme", "Juego", "Soy Daniel".
-       - JSON: {{ "intencion": "inscripcion", "nombre": "Nombre detectado" }}
-
-    6. "reportar_victoria":
-       - Frases: "Gané 3-0", "Victoria".
-       - JSON: {{ "intencion": "reportar_victoria", "sets_ganador": 3, "sets_perdedor": 0 }}
-
-    Si no es nada de esto, responde amable: {{ "intencion": "otra", "respuesta": "Soy Alejandro. Pregúntame por el torneo, inscripciones o resultados." }}
+    B. ¿ES UNA PREGUNTA, SALUDO O CHARLA?
+       Si pregunta precios, fechas, qué eres, saluda, o se queja.
+       -> RESPONDE DIRECTAMENTE EL TEXTO de la respuesta. Sé natural, usa tu contexto.
+       NO devuelvas JSON. Solo habla.
     """
 
     try:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
-            messages=[{"role": "system", "content": prompt}, {"role": "user", "content": texto_usuario}],
-            temperature=0
+            messages=[
+                {"role": "system", "content": prompt}, 
+                {"role": "user", "content": texto_usuario}
+            ],
+            temperature=0.3 # Un poco de creatividad para que no sea robótico
         )
-        content = response.choices[0].message.content.replace("```json", "").replace("```", "")
-        return json.loads(content)
-    except:
-        return {"intencion": "error"}
+        contenido = response.choices[0].message.content
+        
+        # Intentamos ver si es JSON (Acción)
+        if "{" in contenido and "}" in contenido and "accion" in contenido:
+            try:
+                # Limpiamos por si la IA pone ```json ... ```
+                limpio = contenido.replace("```json", "").replace("```", "").strip()
+                return json.loads(limpio)
+            except:
+                pass # Si falla el JSON, lo tratamos como texto normal
+        
+        # Si no es JSON, es charla normal
+        return {"accion": "conversacion", "respuesta_ia": contenido}
+
+    except Exception as e:
+        print(f"Error IA: {e}")
+        return {"accion": "conversacion", "respuesta_ia": "Uy, tuve un pequeño mareo digital. ¿Me repites? 😵‍💫"}
