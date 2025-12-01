@@ -8,7 +8,8 @@ from sqlalchemy.orm import Session
 from database import SessionLocal, engine
 import models
 from ai_agent import analizar_mensaje_ia
-# Importamos todas las herramientas
+# Asegúrate de importar la nueva función consultar_estadisticas_torneo si la creaste en logic, 
+# o usar obtener_estado_torneo que es la que definimos antes.
 from logic import (
     inscribir_jugador, generar_partidos_automaticos, consultar_proximo_partido, 
     registrar_victoria, obtener_estado_torneo, obtener_configuracion, 
@@ -27,14 +28,22 @@ def get_db():
 def enviar_whatsapp(numero, texto):
     try:
         token = os.getenv("WHATSAPP_TOKEN")
-        url = f"https://graph.facebook.com/v17.0/{os.getenv('WHATSAPP_PHONE_ID')}/messages"
+        phone_id = os.getenv("WHATSAPP_PHONE_ID")
+        url = f"https://graph.facebook.com/v17.0/{phone_id}/messages"
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-        # Firma sutil
-        texto_firmado = f"{texto}\n\n_Alejandro • Asistente Pasto.AI_"
+        texto_firmado = f"{texto}\n\n_Alejandro • Pasto.AI_"
         data = {"messaging_product": "whatsapp", "to": numero, "type": "text", "text": {"body": texto_firmado}}
-        requests.post(url, headers=headers, json=data)
+        
+        print(f"📤 INTENTANDO ENVIAR A {numero}...") # Debug
+        response = requests.post(url, headers=headers, json=data)
+        
+        if response.status_code == 200:
+            print("✅ MENSAJE ENVIADO CON ÉXITO")
+        else:
+            print(f"❌ ERROR META: {response.status_code} - {response.text}")
+            
     except Exception as e:
-        print(f"❌ Error WhatsApp: {e}")
+        print(f"❌ Error crítico WhatsApp: {e}")
 
 @app.get("/")
 def dashboard(request: Request, db: Session = Depends(get_db)):
@@ -61,34 +70,55 @@ async def recibir(request: Request, db: Session = Depends(get_db)):
             if msg["type"] == "text":
                 texto = msg["text"]["body"]
                 numero = msg["from"]
+                
+                # Nombre seguro
                 nombre_wa = "Jugador"
                 if "contacts" in value:
                     nombre_wa = value["contacts"][0]["profile"]["name"]
 
-                print(f"📩 MENSAJE de {nombre_wa} ({numero}): {texto}")
+                print(f"📩 RECIBIDO DE: {nombre_wa} ({numero}) MSG: {texto}")
                 
-                # 1. LEER LA LIBRETA (Contexto)
-                # Alejandro lee la base de datos para saber precios, fechas, etc.
-                contexto = obtener_configuracion(db)
+                # --- VERIFICACIÓN DE ADMIN ---
+                admin_real = os.getenv("ADMIN_PHONE")
+                es_admin = str(numero) == str(admin_real)
+                print(f"👮 ES ADMIN: {es_admin} (Esperaba: {admin_real}, Llegó: {numero})")
 
-                # 2. CEREBRO IA
+                # --- CEREBRO ---
+                contexto = obtener_configuracion(db)
                 analisis = analizar_mensaje_ia(texto, contexto)
                 intencion = analisis.get("intencion")
                 print(f"🧠 INTENCIÓN: {intencion}")
                 
                 respuesta = ""
-                es_admin = numero == os.getenv("ADMIN_PHONE")
 
-                # --- ACCIONES DE USUARIO ---
-                if intencion == "inscripcion":
+                # --- ACCIONES ---
+                if intencion == "admin_configurar":
+                    if es_admin:
+                        respuesta = actualizar_configuracion(db, analisis.get("clave"), analisis.get("valor"))
+                    else:
+                        respuesta = "❌ No tienes permisos de administrador."
+
+                elif intencion == "admin_difusion":
+                    if es_admin:
+                        respuesta = enviar_difusion_masiva(db, analisis.get("mensaje"))
+                    else:
+                        respuesta = "❌ No tienes permisos."
+
+                elif intencion == "inscripcion":
                     nombre_real = analisis.get("nombre", nombre_wa)
                     if not nombre_real or nombre_real == "Jugador": nombre_real = nombre_wa
                     respuesta = inscribir_jugador(db, nombre_real, numero)
                 
-                elif intencion == "consulta_general":
-                    # Aquí la IA ya debería haber respondido usando el contexto en su cerebro, 
-                    # pero si no, reforzamos con el estado del torneo.
-                    respuesta = obtener_estado_torneo(db)
+                elif intencion == "consultar_estado":
+                    # Aquí responde con la info de la base de datos (Contexto)
+                    if not contexto or "Aún no hay reglas" in contexto:
+                        respuesta = obtener_estado_torneo(db) # Info genérica si no hay reglas
+                    else:
+                        respuesta = f"ℹ️ **Información Oficial:**\n\n{contexto}"
+
+                elif intencion == "consulta_inscritos":
+                     # Usamos la función de estado que cuenta gente
+                     respuesta = obtener_estado_torneo(db)
 
                 elif intencion == "consultar_partido":
                     respuesta = consultar_proximo_partido(db, numero)
@@ -96,38 +126,14 @@ async def recibir(request: Request, db: Session = Depends(get_db)):
                 elif intencion == "reportar_victoria":
                     respuesta = registrar_victoria(db, numero, analisis.get("sets_ganador", 3), analisis.get("sets_perdedor", 0))
                 
-                elif intencion == "info_ventas":
-                    respuesta = "🤖 ¡Hola! Soy Alejandro, desarrollado por *Pasto.AI*.\nAyudo a empresas y consultorios a automatizar su atención por WhatsApp.\n¿Te gustaría tener un asistente como yo? Contacta a Daniel Martínez."
-
-                # --- ACCIONES DE ADMINISTRADOR (SOLO TÚ) ---
-                elif intencion == "admin_configurar":
-                    if es_admin:
-                        clave = analisis.get("clave")
-                        valor = analisis.get("valor")
-                        respuesta = actualizar_configuracion(db, clave, valor)
-                    else:
-                        respuesta = "❌ No tienes permisos de administrador."
-
-                elif intencion == "admin_difusion":
-                    if es_admin:
-                        mensaje_masivo = analisis.get("mensaje")
-                        respuesta = enviar_difusion_masiva(db, mensaje_masivo)
-                    else:
-                        respuesta = "❌ No tienes permisos."
-
-                elif intencion == "admin_iniciar_torneo":
-                    if es_admin:
-                        respuesta = generar_partidos_automaticos(db)
-                    else:
-                        respuesta = "❌ Solo Daniel puede iniciar el torneo."
-
                 else:
-                    # Si es "otra", dejamos que la IA responda amablemente
-                    respuesta = analisis.get("respuesta", "¡Hola! Estoy aquí para ayudarte con el torneo de Squash. 🎾")
+                    respuesta = analisis.get("respuesta", "No entendí.")
 
+                print(f"🤖 RESPUESTA A ENVIAR: {respuesta}")
                 enviar_whatsapp(numero, respuesta)
+
     except Exception as e:
-        print(f"🔥 Error: {e}")
+        print(f"🔥 ERROR SERVIDOR: {e}")
         traceback.print_exc()
         
     return {"status": "ok"}
