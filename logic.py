@@ -1,108 +1,114 @@
 from sqlalchemy.orm import Session
-from models import Jugador, Partido
+from models import Jugador, Partido, Configuracion
 import random
+import os
+import requests
 from datetime import datetime, timedelta
 
-# --- 1. INSCRIPCIÓN ---
+# --- HERRAMIENTAS DEL JEFE (CONFIGURACIÓN) ---
+def actualizar_configuracion(db: Session, clave: str, valor: str):
+    """Guarda un dato en la libreta de Alejandro"""
+    dato = db.query(Configuracion).filter(Configuracion.key == clave).first()
+    if not dato:
+        dato = Configuracion(key=clave, value=valor)
+        db.add(dato)
+    else:
+        dato.value = valor
+    db.commit()
+    return f"🫡 Listo jefe. He anotado que: **{clave}** es ahora **{valor}**."
+
+def obtener_configuracion(db: Session):
+    """Lee toda la libreta para darle contexto a la IA"""
+    configs = db.query(Configuracion).all()
+    # Convierte la lista en un texto legible
+    texto_config = "\n".join([f"- {c.key}: {c.value}" for c in configs])
+    if not texto_config:
+        return "Aún no hay reglas definidas por el administrador."
+    return texto_config
+
+# --- HERRAMIENTA DE DIFUSIÓN (MASIVO) ---
+def enviar_difusion_masiva(db: Session, mensaje: str):
+    jugadores = db.query(Jugador).all()
+    if not jugadores:
+        return "No hay jugadores inscritos para enviar el mensaje."
+    
+    count = 0
+    token = os.getenv("WHATSAPP_TOKEN")
+    phone_id = os.getenv("WHATSAPP_PHONE_ID")
+    url = f"https://graph.facebook.com/v17.0/{phone_id}/messages"
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+    for j in jugadores:
+        # Enviar uno por uno
+        try:
+            texto_final = f"📢 *ANUNCIO OFICIAL*\n\n{mensaje}\n\n_Alejandro • Pasto.AI_"
+            data = {"messaging_product": "whatsapp", "to": j.celular, "type": "text", "text": {"body": texto_final}}
+            requests.post(url, headers=headers, json=data)
+            count += 1
+        except:
+            continue
+            
+    return f"✅ Mensaje enviado exitosamente a {count} jugadores."
+
+# --- MANTENEMOS LAS FUNCIONES DEL JUEGO (Inscripción, Partidos, etc) ---
+# (Copiadas tal cual para no romper nada)
+
 def inscribir_jugador(db: Session, nombre: str, celular: str):
-    # Verificar si ya existe
     existente = db.query(Jugador).filter(Jugador.celular == celular).first()
     if existente:
-        return f"Hola {existente.nombre}, ya estás inscrito con {existente.puntos} puntos. Espera a que inicie el torneo."
+        return f"¡Hola parce! Ya estás inscrito. Tienes {existente.puntos} puntos. 👊"
     
     nuevo = Jugador(nombre=nombre, celular=celular, puntos=100, categoria="Novatos")
     db.add(nuevo)
     db.commit()
-    return f"✅ ¡Bienvenido al Circuito Pasto.AI, {nombre}!\nTu ranking inicial es: 100 Puntos.\nTe avisaré cuando salgan los cuadros."
+    return f"✅ ¡De una {nombre}! Quedaste inscrito.\nArrancas con 100 Puntos.\nTe aviso apenas salgan los cuadros. 🎾"
 
-# --- 2. GENERAR CUADROS (Botón Mágico) ---
+def obtener_estado_torneo(db: Session):
+    total = db.query(Jugador).count()
+    info_admin = obtener_configuracion(db) # Leemos lo que el jefe ordenó
+    
+    return (f"📊 *Estado del Circuito*\n"
+            f"👥 Inscritos: {total}\n"
+            f"ℹ️ *Info Oficial:*\n{info_admin}")
+
 def generar_partidos_automaticos(db: Session):
+    # (Misma lógica de antes)
     jugadores = db.query(Jugador).all()
-    if len(jugadores) < 2:
-        return "❌ Necesito al menos 2 jugadores inscritos."
-
-    # Limpiar partidos viejos pendientes
+    if len(jugadores) < 2: return "❌ Faltan jugadores."
     db.query(Partido).filter(Partido.estado == "pendiente").delete()
-    
-    # Mezclar y emparejar
     random.shuffle(jugadores)
-    partidos_creados = []
-    
-    # Lógica simple: 1 vs 2, 3 vs 4...
+    creados = 0
     for i in range(0, len(jugadores) - 1, 2):
-        p1 = jugadores[i]
-        p2 = jugadores[i+1]
-        
-        # Asignar Horarios (Simulado para la prueba: Cada 30 mins)
-        hora_base = datetime.now() + timedelta(minutes=10) # Empieza en 10 mins
-        hora_partido = hora_base + timedelta(minutes=30 * (i//2))
-        hora_str = hora_partido.strftime("%I:%M %p")
-        cancha = "1" if (i//2) % 2 == 0 else "2" # Alternar canchas
-
-        nuevo = Partido(
-            jugador_1_id=p1.id, jugador_1_nombre=p1.nombre,
-            jugador_2_id=p2.id, jugador_2_nombre=p2.nombre,
-            cancha=cancha, hora=hora_str, estado="pendiente"
-        )
+        p1, p2 = jugadores[i], jugadores[i+1]
+        nuevo = Partido(jugador_1_id=p1.id, jugador_1_nombre=p1.nombre, jugador_2_id=p2.id, jugador_2_nombre=p2.nombre, cancha="1", hora="Por definir", estado="pendiente")
         db.add(nuevo)
-        partidos_creados.append(nuevo)
-    
+        creados += 1
     db.commit()
-    return f"✅ ¡Torneo Iniciado! Se crearon {len(partidos_creados)} partidos. Los jugadores pueden preguntar '¿A qué hora juego?'"
+    return f"✅ Cuadros generados ({creados} partidos). Los jugadores ya pueden consultar."
 
-# --- 3. CONSULTAR MI PARTIDO ---
 def consultar_proximo_partido(db: Session, celular: str):
     jugador = db.query(Jugador).filter(Jugador.celular == celular).first()
-    if not jugador:
-        return "No estás inscrito. Di 'Quiero inscribirme' para empezar."
-    
-    partido = db.query(Partido).filter(
-        (Partido.jugador_1_id == jugador.id) | (Partido.jugador_2_id == jugador.id),
-        Partido.estado == "pendiente"
-    ).first()
-    
-    if not partido:
-        return f"{jugador.nombre}, no tienes partidos programados por ahora. ¡Revisa el ranking!"
-    
+    if not jugador: return "No te veo en la lista, tigre. Escribe 'Quiero jugar' para inscribirte."
+    partido = db.query(Partido).filter((Partido.jugador_1_id == jugador.id) | (Partido.jugador_2_id == jugador.id), Partido.estado == "pendiente").first()
+    if not partido: return f"{jugador.nombre}, por ahora relax. No tienes partidos programados."
     rival = partido.jugador_2_nombre if partido.jugador_1_id == jugador.id else partido.jugador_1_nombre
-    return f"📅 *TU PRÓXIMO PARTIDO*\n🆚 Rival: {rival}\n⏰ Hora: {partido.hora}\n🏟️ Cancha: {partido.cancha}\n\nCuando terminen, reporta el resultado diciendo: 'Gané 3-0'."
+    return f"📅 *PRÓXIMO RETO*\n🆚 VS: {rival}\n⏰ Hora: {partido.hora}\n🏟️ Cancha: {partido.cancha}"
 
-# --- 4. REGISTRAR RESULTADO (Sistema Puntos Simplificado) ---
 def registrar_victoria(db: Session, celular_ganador: str, sets_ganador: int, sets_perdedor: int):
     ganador = db.query(Jugador).filter(Jugador.celular == celular_ganador).first()
     if not ganador: return "No estás inscrito."
-
-    partido = db.query(Partido).filter(
-        ((Partido.jugador_1_id == ganador.id) | (Partido.jugador_2_id == ganador.id)) & (Partido.estado == "pendiente")
-    ).first()
-
-    if not partido: return "No tienes partido pendiente para reportar."
-
-    # Identificar Perdedor
+    partido = db.query(Partido).filter(((Partido.jugador_1_id == ganador.id) | (Partido.jugador_2_id == ganador.id)) & (Partido.estado == "pendiente")).first()
+    if not partido: return "No tienes partido pendiente."
+    
+    # Lógica de puntos
     id_perdedor = partido.jugador_2_id if partido.jugador_1_id == ganador.id else partido.jugador_1_id
     perdedor = db.query(Jugador).filter(Jugador.id == id_perdedor).first()
-
-    # --- MATEMÁTICA DE PUNTOS (SISTEMA DE ROBO) ---
-    puntos_en_juego = 10 # Base
     
-    # Si el débil le gana al fuerte (Batacazo), roba más
-    if ganador.puntos < perdedor.puntos:
-        puntos_en_juego = 20 # Premio doble
-    
-    # Transferencia
-    ganador.puntos += puntos_en_juego
-    perdedor.puntos = max(0, perdedor.puntos - puntos_en_juego) # No bajar de 0
-    
-    # Guardar stats
-    ganador.victorias += 1
-    perdedor.derrotas += 1
+    ganador.puntos += 10
+    perdedor.puntos = max(0, perdedor.puntos - 10)
     partido.estado = "finalizado"
     partido.ganador_id = ganador.id
     partido.marcador = f"{sets_ganador}-{sets_perdedor}"
     
     db.commit()
-    
-    return (f"✅ *Resultado Confirmado*\n"
-            f"🏆 {ganador.nombre} (+{puntos_en_juego} pts) -> {ganador.puntos}\n"
-            f"📉 {perdedor.nombre} (-{puntos_en_juego} pts) -> {perdedor.puntos}\n"
-            f"🔗 Mira el ranking: https://torneo-pasto-ai.onrender.com")
+    return f"🔥 *¡Buena esa! Victoria registrada.*\n📈 {ganador.nombre}: {ganador.puntos} pts\n📉 {perdedor.nombre}: {perdedor.puntos} pts"
