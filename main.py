@@ -30,7 +30,8 @@ def enviar_whatsapp(numero, texto):
         url = f"https://graph.facebook.com/v17.0/{phone_id}/messages"
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         
-        if len(texto) > 30:
+        # Firma profesional para mensajes largos
+        if len(texto) > 40:
             texto_final = f"{texto}\n\n━━━━━━━━━━━━━━━━\n🚀 *Desarrollado por Pasto.AI*\nSoluciones de IA para Profesionales"
         else:
             texto_final = texto
@@ -40,17 +41,16 @@ def enviar_whatsapp(numero, texto):
     except Exception as e:
         print(f"❌ Error WhatsApp: {e}")
 
-# RUTA 1: RANKING (HOME)
+# RUTA 1: RANKING
 @app.get("/")
 def dashboard(request: Request, db: Session = Depends(get_db)):
     jugadores = db.query(models.Jugador).order_by(models.Jugador.puntos.desc()).all()
-    # Enviamos "partidos" vacío porque ya no se muestran aquí, pero por si acaso.
-    return templates.TemplateResponse("ranking.html", {"request": request, "jugadores": jugadores})
+    partidos = db.query(models.Partido).all()
+    return templates.TemplateResponse("ranking.html", {"request": request, "jugadores": jugadores, "partidos": partidos})
 
-# RUTA 2: PROGRAMACIÓN (NUEVA)
+# RUTA 2: PROGRAMACIÓN
 @app.get("/programacion")
 def ver_programacion(request: Request, db: Session = Depends(get_db)):
-    # Ordenamos por hora para que salga cronológico
     partidos = db.query(models.Partido).order_by(models.Partido.hora.asc()).all()
     return templates.TemplateResponse("partidos.html", {"request": request, "partidos": partidos})
 
@@ -74,6 +74,7 @@ async def recibir(request: Request, db: Session = Depends(get_db)):
                 texto = msg["text"]["body"]
                 numero = msg["from"]
                 
+                # Obtenemos el nombre del perfil de WhatsApp
                 nombre_wa = "Jugador"
                 if "contacts" in value:
                     nombre_wa = value["contacts"][0]["profile"]["name"]
@@ -106,7 +107,15 @@ async def recibir(request: Request, db: Session = Depends(get_db)):
                 
                 elif accion == "reportar_victoria":
                     nombre_ganador = datos.get("nombre_ganador", "")
-                    respuesta = registrar_victoria(db, numero, nombre_ganador, datos.get("sets_ganador", 3), datos.get("sets_perdedor", 0))
+                    # AQUÍ ESTABA LA MAGIA FALTANTE: Pasamos nombre_wa
+                    respuesta = registrar_victoria(
+                        db, 
+                        numero, 
+                        nombre_ganador, 
+                        nombre_wa, 
+                        datos.get("sets_ganador", 3), 
+                        datos.get("sets_perdedor", 0)
+                    )
 
                 elif accion == "admin_wizard":
                     if es_admin:
@@ -124,8 +133,8 @@ async def recibir(request: Request, db: Session = Depends(get_db)):
                     else: respuesta = "❌ Solo Admin."
 
                 elif accion == "admin_iniciar":
-                    # Este se redirige al Wizard
                     if es_admin:
+                        # Redirige al Wizard
                         respuesta = procesar_organizacion_torneo(db, "organizar torneo")
                     else: respuesta = "❌ Solo Admin."
 
