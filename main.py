@@ -30,7 +30,8 @@ def enviar_whatsapp(numero, texto):
         url = f"https://graph.facebook.com/v17.0/{phone_id}/messages"
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         
-        if len(texto) > 30:
+        # Firma profesional solo en mensajes informativos largos
+        if len(texto) > 40:
             texto_final = f"{texto}\n\n━━━━━━━━━━━━━━━━\n🚀 *Desarrollado por Pasto.AI*\nSoluciones de IA para Profesionales"
         else:
             texto_final = texto
@@ -54,6 +55,9 @@ def verificar(request: Request):
 
 @app.post("/webhook")
 async def recibir(request: Request, db: Session = Depends(get_db)):
+    # Variable para guardar el número y poder avisar si hay error
+    numero_para_error = None
+    
     try:
         data = await request.json()
         entry = data.get("entry", [])[0]
@@ -65,6 +69,7 @@ async def recibir(request: Request, db: Session = Depends(get_db)):
             if msg["type"] == "text":
                 texto = msg["text"]["body"]
                 numero = msg["from"]
+                numero_para_error = numero
                 
                 nombre_wa = "Jugador"
                 if "contacts" in value:
@@ -82,6 +87,7 @@ async def recibir(request: Request, db: Session = Depends(get_db)):
                 respuesta = ""
                 es_admin = str(numero) == str(os.getenv("ADMIN_PHONE"))
 
+                # --- EJECUCIÓN DE ACCIONES ---
                 if accion == "conversacion":
                     respuesta = analisis.get("respuesta_ia", "Hola")
 
@@ -103,23 +109,29 @@ async def recibir(request: Request, db: Session = Depends(get_db)):
                 elif accion == "admin_configurar":
                     if es_admin:
                         respuesta = actualizar_configuracion(db, datos.get("clave"), datos.get("valor"))
-                    else: respuesta = "❌ Solo Admin."
+                    else: respuesta = "❌ Solo el administrador puede configurar."
 
                 elif accion == "admin_difusion":
                     if es_admin:
                         respuesta = enviar_difusion_masiva(db, datos.get("mensaje"))
-                    else: respuesta = "❌ Solo Admin."
+                    else: respuesta = "❌ Acceso denegado."
 
                 elif accion == "admin_iniciar":
                     if es_admin:
                         respuesta = generar_partidos_automaticos(db)
-                    else: respuesta = "❌ Solo Admin."
+                    else: respuesta = "❌ Esperando orden del administrador."
 
+                # Enviar la respuesta generada
                 if respuesta:
                     enviar_whatsapp(numero, respuesta)
 
     except Exception as e:
-        print(f"🔥 Error: {e}")
+        print(f"🔥 Error Crítico: {e}")
         traceback.print_exc()
+        
+        # LA RED DE SEGURIDAD: Avisar al usuario que hubo un error técnico
+        if numero_para_error:
+            mensaje_error = "🤒 Tuve un pequeño mareo técnico y no pude procesar eso. ¿Me lo repites porfa? 🎾"
+            enviar_whatsapp(numero_para_error, mensaje_error)
         
     return {"status": "ok"}
