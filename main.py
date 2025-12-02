@@ -30,14 +30,12 @@ def enviar_whatsapp(numero, texto):
         url = f"https://graph.facebook.com/v17.0/{phone_id}/messages"
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         
-        # Firma profesional solo en mensajes largos
         if len(texto) > 30:
             texto_final = f"{texto}\n\n━━━━━━━━━━━━━━━━\n🚀 *Desarrollado por Pasto.AI*\nSoluciones de IA para Profesionales"
         else:
             texto_final = texto
             
         data = {"messaging_product": "whatsapp", "to": numero, "type": "text", "text": {"body": texto_final}}
-        # print(f"📤 Enviando a {numero}...") 
         requests.post(url, headers=headers, json=data)
     except Exception as e:
         print(f"❌ Error WhatsApp: {e}")
@@ -74,10 +72,8 @@ async def recibir(request: Request, db: Session = Depends(get_db)):
 
                 print(f"📩 {nombre_wa}: {texto}")
                 
-                # 1. OBTENER CONTEXTO Y ANALIZAR
                 contexto = obtener_configuracion(db)
                 analisis = analizar_mensaje_ia(texto, contexto)
-                
                 accion = analisis.get("accion")
                 datos = analisis.get("datos", {})
                 
@@ -86,16 +82,12 @@ async def recibir(request: Request, db: Session = Depends(get_db)):
                 respuesta = ""
                 es_admin = str(numero) == str(os.getenv("ADMIN_PHONE"))
 
-                # --- RUTAS DE RESPUESTA ---
-                
-                # CASO 1: CHARLA PURA (La IA generó la respuesta)
                 if accion == "conversacion":
-                    respuesta = analisis.get("respuesta_ia", "¡Hola! ¿En qué te ayudo?")
+                    respuesta = analisis.get("respuesta_ia", "Hola")
 
-                # CASO 2: ACCIONES DE BASE DE DATOS (Logic.py genera la respuesta)
                 elif accion == "inscripcion":
                     nombre_real = datos.get("nombre", nombre_wa)
-                    if nombre_real == "Jugador": nombre_real = nombre_wa
+                    if nombre_real == "Jugador" or not nombre_real: nombre_real = nombre_wa
                     respuesta = inscribir_jugador(db, nombre_real, numero)
                 
                 elif accion == "consultar_inscritos":
@@ -105,33 +97,29 @@ async def recibir(request: Request, db: Session = Depends(get_db)):
                     respuesta = consultar_proximo_partido(db, numero)
                 
                 elif accion == "reportar_victoria":
-                    respuesta = registrar_victoria(db, numero, datos.get("sets_ganador", 3), datos.get("sets_perdedor", 0))
+                    nombre_ganador = datos.get("nombre_ganador", "")
+                    respuesta = registrar_victoria(db, numero, nombre_ganador, datos.get("sets_ganador", 3), datos.get("sets_perdedor", 0))
 
-                # CASO 3: ADMIN
                 elif accion == "admin_configurar":
                     if es_admin:
                         respuesta = actualizar_configuracion(db, datos.get("clave"), datos.get("valor"))
-                    else:
-                        respuesta = "❌ Comando solo para el administrador."
+                    else: respuesta = "❌ Solo Admin."
 
                 elif accion == "admin_difusion":
                     if es_admin:
                         respuesta = enviar_difusion_masiva(db, datos.get("mensaje"))
-                    else:
-                        respuesta = "❌ Acceso denegado."
+                    else: respuesta = "❌ Solo Admin."
 
                 elif accion == "admin_iniciar":
                     if es_admin:
                         respuesta = generar_partidos_automaticos(db)
-                    else:
-                        respuesta = "❌ Esperando orden del administrador."
+                    else: respuesta = "❌ Solo Admin."
 
-                # --- ENVIAR RESPUESTA FINAL (Limpia, sin JSON) ---
                 if respuesta:
                     enviar_whatsapp(numero, respuesta)
 
     except Exception as e:
-        print(f"🔥 Error Servidor: {e}")
+        print(f"🔥 Error: {e}")
         traceback.print_exc()
         
     return {"status": "ok"}
