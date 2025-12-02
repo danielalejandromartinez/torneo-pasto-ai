@@ -30,15 +30,14 @@ def enviar_whatsapp(numero, texto):
         url = f"https://graph.facebook.com/v17.0/{phone_id}/messages"
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         
-        # --- FIRMA PROFESIONAL ---
-        # Solo la ponemos si no es una respuesta muy cortita (para que se vea natural)
-        if len(texto) > 20:
+        # Firma profesional solo en mensajes largos
+        if len(texto) > 30:
             texto_final = f"{texto}\n\n━━━━━━━━━━━━━━━━\n🚀 *Desarrollado por Pasto.AI*\nSoluciones de IA para Profesionales"
         else:
-            texto_final = texto # Si responde "Dale", no ponemos firma para que sea muy humano
+            texto_final = texto
             
         data = {"messaging_product": "whatsapp", "to": numero, "type": "text", "text": {"body": texto_final}}
-        print(f"📤 Enviando a {numero}...") 
+        # print(f"📤 Enviando a {numero}...") 
         requests.post(url, headers=headers, json=data)
     except Exception as e:
         print(f"❌ Error WhatsApp: {e}")
@@ -75,21 +74,26 @@ async def recibir(request: Request, db: Session = Depends(get_db)):
 
                 print(f"📩 {nombre_wa}: {texto}")
                 
-                # Contexto y Cerebro
+                # 1. OBTENER CONTEXTO Y ANALIZAR
                 contexto = obtener_configuracion(db)
                 analisis = analizar_mensaje_ia(texto, contexto)
+                
                 accion = analisis.get("accion")
+                datos = analisis.get("datos", {})
+                
                 print(f"🧠 ACCIÓN: {accion}")
                 
                 respuesta = ""
                 es_admin = str(numero) == str(os.getenv("ADMIN_PHONE"))
 
-                # --- RESPUESTAS ---
+                # --- RUTAS DE RESPUESTA ---
+                
+                # CASO 1: CHARLA PURA (La IA generó la respuesta)
                 if accion == "conversacion":
-                    respuesta = analisis.get("respuesta_ia")
+                    respuesta = analisis.get("respuesta_ia", "¡Hola! ¿En qué te ayudo?")
 
+                # CASO 2: ACCIONES DE BASE DE DATOS (Logic.py genera la respuesta)
                 elif accion == "inscripcion":
-                    datos = analisis.get("datos", {})
                     nombre_real = datos.get("nombre", nombre_wa)
                     if nombre_real == "Jugador": nombre_real = nombre_wa
                     respuesta = inscribir_jugador(db, nombre_real, numero)
@@ -101,19 +105,17 @@ async def recibir(request: Request, db: Session = Depends(get_db)):
                     respuesta = consultar_proximo_partido(db, numero)
                 
                 elif accion == "reportar_victoria":
-                    datos = analisis.get("datos", {})
                     respuesta = registrar_victoria(db, numero, datos.get("sets_ganador", 3), datos.get("sets_perdedor", 0))
 
+                # CASO 3: ADMIN
                 elif accion == "admin_configurar":
                     if es_admin:
-                        datos = analisis.get("datos", {})
                         respuesta = actualizar_configuracion(db, datos.get("clave"), datos.get("valor"))
                     else:
-                        respuesta = "❌ Solo el administrador puede configurar esto."
+                        respuesta = "❌ Comando solo para el administrador."
 
                 elif accion == "admin_difusion":
                     if es_admin:
-                        datos = analisis.get("datos", {})
                         respuesta = enviar_difusion_masiva(db, datos.get("mensaje"))
                     else:
                         respuesta = "❌ Acceso denegado."
@@ -124,7 +126,9 @@ async def recibir(request: Request, db: Session = Depends(get_db)):
                     else:
                         respuesta = "❌ Esperando orden del administrador."
 
-                enviar_whatsapp(numero, respuesta)
+                # --- ENVIAR RESPUESTA FINAL (Limpia, sin JSON) ---
+                if respuesta:
+                    enviar_whatsapp(numero, respuesta)
 
     except Exception as e:
         print(f"🔥 Error Servidor: {e}")
