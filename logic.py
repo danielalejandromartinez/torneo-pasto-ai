@@ -47,7 +47,6 @@ def enviar_difusion_masiva(db: Session, mensaje: str):
     return f"✅ Enviado a {count} números únicos."
 
 # --- MÁQUINA DE ESTADOS (WIZARD DE ORGANIZACIÓN) ---
-# ESTA ES LA FUNCIÓN QUE FALTABA
 def procesar_organizacion_torneo(db: Session, mensaje_usuario: str):
     paso_actual = get_config(db, "wizard_paso")
     
@@ -83,7 +82,7 @@ def procesar_organizacion_torneo(db: Session, mensaje_usuario: str):
     if paso_actual == "confirmar":
         if "generar" in mensaje_usuario.lower():
             set_config(db, "wizard_paso", "") 
-            return generar_partidos_automaticos(db) # Usamos la función principal
+            return generar_partidos_automaticos(db)
         else:
             return "Escribe **GENERAR** para confirmar o 'Organizar torneo' para reiniciar."
 
@@ -105,14 +104,12 @@ def obtener_estado_torneo(db: Session):
     return f"📊 *Estado*\n👥 Inscritos: {total}\nℹ️ {info}"
 
 def generar_partidos_automaticos(db: Session):
-    # Esta función ahora usa la configuración de la base de datos
     jugadores = db.query(Jugador).all()
     if len(jugadores) < 2: return "❌ Faltan jugadores."
     
     db.query(Partido).filter(Partido.estado == "pendiente").delete()
     random.shuffle(jugadores)
     
-    # Intentamos leer config, si falla usamos defaults
     try:
         num_canchas = int(get_config(db, "num_canchas") or 1)
         duracion = int(get_config(db, "duracion_partido") or 30)
@@ -127,7 +124,6 @@ def generar_partidos_automaticos(db: Session):
     cancha_actual = 1
     slot_tiempo = 0
     
-    # Emparejamiento simple
     num_matches = len(jugadores) // 2
     
     for i in range(num_matches):
@@ -170,18 +166,67 @@ def consultar_proximo_partido(db: Session, celular: str):
     return resp
 
 def registrar_victoria(db: Session, celular: str, nombre_ganador_detectado: str, sets_ganador: int, sets_perdedor: int):
-    # (Manteniendo la lógica que ya funcionaba)
+    # Buscar mis perfiles
     mis_jugadores = db.query(Jugador).filter(Jugador.celular == celular).all()
-    if not mis_jugadores: return "No tienes perfiles."
+    if not mis_jugadores: return "No tienes perfiles inscritos."
+    
     ids_jugadores = [p.id for p in mis_jugadores]
-    partidos = db.query(Partido).filter((Partido.jugador_1_id.in_(ids_jugadores)) | (Partido.jugador_2_id.in_(ids_jugadores)), Partido.estado == "pendiente").all()
-    if not partidos: return "No tienes partidos pendientes."
+    
+    # Buscar partidos activos
+    partidos = db.query(Partido).filter(
+        (Partido.jugador_1_id.in_(ids_jugadores)) | (Partido.jugador_2_id.in_(ids_jugadores)),
+        Partido.estado == "pendiente"
+    ).all()
+    
+    if not partidos: return "No tienes partidos pendientes para reportar."
     
     partido_objetivo = None
     mi_jugador_ganador = None
     
+    # Caso A: Solo hay 1 partido activo en la familia
     if len(partidos) == 1:
         partido_objetivo = partidos[0]
-        mi_jugador_ganador = db.query(Jugador).get(partido_objetivo.jugador_1_id if partido_objetivo.jugador_1_id in ids_jugadores else partido_objetivo.jugador_2_id)
+        if partido_objetivo.jugador_1_id in ids_jugadores:
+            mi_jugador_ganador = db.query(Jugador).get(partido_objetivo.jugador_1_id)
+        else:
+            mi_jugador_ganador = db.query(Jugador).get(partido_objetivo.jugador_2_id)
+            
+    # Caso B: Hay varios partidos (Ej: Juega papá e hijo al tiempo)
     else:
-        if not nombre_ganador_detec
+        # AQUÍ ESTABA EL ERROR: Faltaban los dos puntos al final del if
+        if not nombre_ganador_detectado:
+            return f"⚠️ Tienes varios partidos activos. Por favor dime explícitamente: **'Ganó [Nombre]'**."
+        
+        # Buscamos coincidencias de nombre
+        for p in partidos:
+            j1 = db.query(Jugador).get(p.jugador_1_id)
+            j2 = db.query(Jugador).get(p.jugador_2_id)
+            
+            if nombre_ganador_detectado.lower() in j1.nombre.lower() and j1.id in ids_jugadores:
+                partido_objetivo = p
+                mi_jugador_ganador = j1
+                break
+            elif nombre_ganador_detectado.lower() in j2.nombre.lower() and j2.id in ids_jugadores:
+                partido_objetivo = p
+                mi_jugador_ganador = j2
+                break
+        
+        if not partido_objetivo:
+            return f"❌ No encontré un partido pendiente para **{nombre_ganador_detectado}** en tu cuenta."
+
+    # Guardar resultado
+    id_perdedor = partido_objetivo.jugador_2_id if partido_objetivo.jugador_1_id == mi_jugador_ganador.id else partido_objetivo.jugador_1_id
+    perdedor = db.query(Jugador).get(id_perdedor)
+    
+    mi_jugador_ganador.puntos += 10
+    perdedor.puntos = max(0, perdedor.puntos - 10)
+    
+    mi_jugador_ganador.victorias += 1
+    perdedor.derrotas += 1
+    
+    partido_objetivo.estado = "finalizado"
+    partido_objetivo.ganador_id = mi_jugador_ganador.id
+    partido_objetivo.marcador = f"{sets_ganador}-{sets_perdedor}"
+    
+    db.commit()
+    return f"🏆 **¡VICTORIA REGISTRADA!**\n\nGanador: **{mi_jugador_ganador.nombre}**\nMarcador: {sets_ganador}-{sets_perdedor}\nRanking actualizado. 📈"
