@@ -27,7 +27,8 @@ def analizar_mensaje_ia(texto_usuario: str, contexto_reglas: str):
     Analiza la frase del usuario.
     
     INSTRUCCIÓN TÉCNICA OBLIGATORIA:
-    Responde SIEMPRE con un JSON válido.
+    1. Responde SIEMPRE con un JSON válido.
+    2. Los nombres de las acciones deben estar en MINÚSCULAS (ej: "conversacion", no "Conversacion").
     
     ESTRUCTURA JSON:
     {{
@@ -57,10 +58,12 @@ def analizar_mensaje_ia(texto_usuario: str, contexto_reglas: str):
        - Frases: "Gané 3-0", "Miguel ganó", "Victoria de Sarita".
        - JSON: {{ "accion": "reportar_victoria", "datos": {{ "sets_ganador": 3, "sets_perdedor": 0, "nombre_ganador": "Nombre Detectado (Opcional)" }} }}
 
-    5. ADMINISTRADOR (Solo Jefe):
+    5. WIZARD ORGANIZADOR (Si el Admin dice "Organizar torneo" o responde al wizard):
+       - JSON: {{ "accion": "admin_wizard", "datos": {{ "mensaje": "{texto_usuario}" }} }}
+
+    6. ADMINISTRADOR COMANDOS (Solo Jefe):
        - "Configurar [clave] es [valor]". -> {{ "accion": "admin_configurar", "datos": {{ "clave": "...", "valor": "..." }} }}
        - "Enviar mensaje a todos: [texto]". -> {{ "accion": "admin_difusion", "datos": {{ "mensaje": "..." }} }}
-       - "Iniciar torneo". -> {{ "accion": "admin_iniciar" }}
 
     --------------------------------------------------------
     CASO B: CONVERSACIÓN / DUDAS / SALUDOS

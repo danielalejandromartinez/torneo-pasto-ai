@@ -25,30 +25,41 @@ def get_db():
 
 def enviar_whatsapp(numero, texto):
     try:
+        print(f"🚀 INTENTANDO ENVIAR A {numero}...")
         token = os.getenv("WHATSAPP_TOKEN")
         phone_id = os.getenv("WHATSAPP_PHONE_ID")
+        
+        if not token or not phone_id:
+            print("❌ ERROR: Faltan credenciales en Render.")
+            return
+
         url = f"https://graph.facebook.com/v17.0/{phone_id}/messages"
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         
-        # Firma profesional para mensajes largos
+        # Firma profesional solo si el mensaje es largo
         if len(texto) > 40:
             texto_final = f"{texto}\n\n━━━━━━━━━━━━━━━━\n🚀 *Desarrollado por Pasto.AI*\nSoluciones de IA para Profesionales"
         else:
             texto_final = texto
             
         data = {"messaging_product": "whatsapp", "to": numero, "type": "text", "text": {"body": texto_final}}
-        requests.post(url, headers=headers, json=data)
+        
+        response = requests.post(url, headers=headers, json=data)
+        
+        if response.status_code == 200:
+            print("✅ MENSAJE ENTREGADO A META.")
+        else:
+            print(f"❌ ERROR META ({response.status_code}): {response.text}")
+            
     except Exception as e:
-        print(f"❌ Error WhatsApp: {e}")
+        print(f"❌ Error crítico en función enviar_whatsapp: {e}")
 
-# RUTA 1: RANKING
 @app.get("/")
 def dashboard(request: Request, db: Session = Depends(get_db)):
     jugadores = db.query(models.Jugador).order_by(models.Jugador.puntos.desc()).all()
     partidos = db.query(models.Partido).all()
     return templates.TemplateResponse("ranking.html", {"request": request, "jugadores": jugadores, "partidos": partidos})
 
-# RUTA 2: PROGRAMACIÓN
 @app.get("/programacion")
 def ver_programacion(request: Request, db: Session = Depends(get_db)):
     partidos = db.query(models.Partido).order_by(models.Partido.hora.asc()).all()
@@ -74,23 +85,27 @@ async def recibir(request: Request, db: Session = Depends(get_db)):
                 texto = msg["text"]["body"]
                 numero = msg["from"]
                 
-                # Obtenemos el nombre del perfil de WhatsApp
                 nombre_wa = "Jugador"
                 if "contacts" in value:
                     nombre_wa = value["contacts"][0]["profile"]["name"]
 
-                print(f"📩 {nombre_wa}: {texto}")
+                print(f"📩 MENSAJE DE {nombre_wa}: {texto}")
                 
                 contexto = obtener_configuracion(db)
                 analisis = analizar_mensaje_ia(texto, contexto)
-                accion = analisis.get("accion")
-                datos = analisis.get("datos", {})
                 
-                print(f"🧠 ACCIÓN: {accion}")
+                # --- AQUÍ ESTÁ EL ARREGLO CLAVE ---
+                # Limpiamos la acción para evitar errores de espacios o mayúsculas
+                accion_raw = analisis.get("accion", "conversacion")
+                accion = str(accion_raw).strip().lower()
+                
+                datos = analisis.get("datos", {})
+                print(f"🧠 CEREBRO PENSÓ: '{accion}'")
                 
                 respuesta = ""
                 es_admin = str(numero) == str(os.getenv("ADMIN_PHONE"))
 
+                # --- RUTAS DE RESPUESTA ---
                 if accion == "conversacion":
                     respuesta = analisis.get("respuesta_ia", "Hola")
 
@@ -107,15 +122,7 @@ async def recibir(request: Request, db: Session = Depends(get_db)):
                 
                 elif accion == "reportar_victoria":
                     nombre_ganador = datos.get("nombre_ganador", "")
-                    # AQUÍ ESTABA LA MAGIA FALTANTE: Pasamos nombre_wa
-                    respuesta = registrar_victoria(
-                        db, 
-                        numero, 
-                        nombre_ganador, 
-                        nombre_wa, 
-                        datos.get("sets_ganador", 3), 
-                        datos.get("sets_perdedor", 0)
-                    )
+                    respuesta = registrar_victoria(db, numero, nombre_ganador, nombre_wa, datos.get("sets_ganador", 3), datos.get("sets_perdedor", 0))
 
                 elif accion == "admin_wizard":
                     if es_admin:
@@ -134,12 +141,18 @@ async def recibir(request: Request, db: Session = Depends(get_db)):
 
                 elif accion == "admin_iniciar":
                     if es_admin:
-                        # Redirige al Wizard
                         respuesta = procesar_organizacion_torneo(db, "organizar torneo")
                     else: respuesta = "❌ Solo Admin."
+                
+                else:
+                    print(f"⚠️ ALERTA: Acción '{accion}' desconocida.")
+                    respuesta = analisis.get("respuesta_ia", "No entendí tu solicitud.")
 
+                # Enviar respuesta
                 if respuesta:
                     enviar_whatsapp(numero, respuesta)
+                else:
+                    print("⚠️ ALERTA CRÍTICA: La variable 'respuesta' quedó vacía.")
 
     except Exception as e:
         print(f"🔥 Error Servidor: {e}")
