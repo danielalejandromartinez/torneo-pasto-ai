@@ -11,7 +11,7 @@ from ai_agent import analizar_mensaje_ia
 from logic import (
     inscribir_jugador, generar_partidos_automaticos, consultar_proximo_partido, 
     registrar_victoria, obtener_estado_torneo, obtener_configuracion, 
-    actualizar_configuracion, enviar_difusion_masiva
+    actualizar_configuracion, enviar_difusion_masiva, procesar_organizacion_torneo
 )
 
 models.Base.metadata.create_all(bind=engine)
@@ -30,8 +30,7 @@ def enviar_whatsapp(numero, texto):
         url = f"https://graph.facebook.com/v17.0/{phone_id}/messages"
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         
-        # Firma profesional solo en mensajes informativos largos
-        if len(texto) > 40:
+        if len(texto) > 30:
             texto_final = f"{texto}\n\n━━━━━━━━━━━━━━━━\n🚀 *Desarrollado por Pasto.AI*\nSoluciones de IA para Profesionales"
         else:
             texto_final = texto
@@ -41,11 +40,19 @@ def enviar_whatsapp(numero, texto):
     except Exception as e:
         print(f"❌ Error WhatsApp: {e}")
 
+# RUTA 1: RANKING (HOME)
 @app.get("/")
 def dashboard(request: Request, db: Session = Depends(get_db)):
     jugadores = db.query(models.Jugador).order_by(models.Jugador.puntos.desc()).all()
-    partidos = db.query(models.Partido).all()
-    return templates.TemplateResponse("ranking.html", {"request": request, "jugadores": jugadores, "partidos": partidos})
+    # Enviamos "partidos" vacío porque ya no se muestran aquí, pero por si acaso.
+    return templates.TemplateResponse("ranking.html", {"request": request, "jugadores": jugadores})
+
+# RUTA 2: PROGRAMACIÓN (NUEVA)
+@app.get("/programacion")
+def ver_programacion(request: Request, db: Session = Depends(get_db)):
+    # Ordenamos por hora para que salga cronológico
+    partidos = db.query(models.Partido).order_by(models.Partido.hora.asc()).all()
+    return templates.TemplateResponse("partidos.html", {"request": request, "partidos": partidos})
 
 @app.get("/webhook")
 def verificar(request: Request):
@@ -55,9 +62,6 @@ def verificar(request: Request):
 
 @app.post("/webhook")
 async def recibir(request: Request, db: Session = Depends(get_db)):
-    # Variable para guardar el número y poder avisar si hay error
-    numero_para_error = None
-    
     try:
         data = await request.json()
         entry = data.get("entry", [])[0]
@@ -69,7 +73,6 @@ async def recibir(request: Request, db: Session = Depends(get_db)):
             if msg["type"] == "text":
                 texto = msg["text"]["body"]
                 numero = msg["from"]
-                numero_para_error = numero
                 
                 nombre_wa = "Jugador"
                 if "contacts" in value:
@@ -87,7 +90,6 @@ async def recibir(request: Request, db: Session = Depends(get_db)):
                 respuesta = ""
                 es_admin = str(numero) == str(os.getenv("ADMIN_PHONE"))
 
-                # --- EJECUCIÓN DE ACCIONES ---
                 if accion == "conversacion":
                     respuesta = analisis.get("respuesta_ia", "Hola")
 
@@ -106,32 +108,32 @@ async def recibir(request: Request, db: Session = Depends(get_db)):
                     nombre_ganador = datos.get("nombre_ganador", "")
                     respuesta = registrar_victoria(db, numero, nombre_ganador, datos.get("sets_ganador", 3), datos.get("sets_perdedor", 0))
 
+                elif accion == "admin_wizard":
+                    if es_admin:
+                        respuesta = procesar_organizacion_torneo(db, datos.get("mensaje", ""))
+                    else: respuesta = "❌ Solo Admin."
+
                 elif accion == "admin_configurar":
                     if es_admin:
                         respuesta = actualizar_configuracion(db, datos.get("clave"), datos.get("valor"))
-                    else: respuesta = "❌ Solo el administrador puede configurar."
+                    else: respuesta = "❌ Solo Admin."
 
                 elif accion == "admin_difusion":
                     if es_admin:
                         respuesta = enviar_difusion_masiva(db, datos.get("mensaje"))
-                    else: respuesta = "❌ Acceso denegado."
+                    else: respuesta = "❌ Solo Admin."
 
                 elif accion == "admin_iniciar":
+                    # Este se redirige al Wizard
                     if es_admin:
-                        respuesta = generar_partidos_automaticos(db)
-                    else: respuesta = "❌ Esperando orden del administrador."
+                        respuesta = procesar_organizacion_torneo(db, "organizar torneo")
+                    else: respuesta = "❌ Solo Admin."
 
-                # Enviar la respuesta generada
                 if respuesta:
                     enviar_whatsapp(numero, respuesta)
 
     except Exception as e:
-        print(f"🔥 Error Crítico: {e}")
+        print(f"🔥 Error Servidor: {e}")
         traceback.print_exc()
-        
-        # LA RED DE SEGURIDAD: Avisar al usuario que hubo un error técnico
-        if numero_para_error:
-            mensaje_error = "🤒 Tuve un pequeño mareo técnico y no pude procesar eso. ¿Me lo repites porfa? 🎾"
-            enviar_whatsapp(numero_para_error, mensaje_error)
         
     return {"status": "ok"}
