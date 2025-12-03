@@ -8,7 +8,7 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 def analizar_mensaje_ia(texto_usuario: str, contexto_completo: str):
     """
-    Agente Autónomo Gerencial v2 (Con capacidad de aprendizaje).
+    Agente Autónomo Gerencial v3 (Refinado para nombres propios).
     """
     
     prompt = f"""
@@ -18,31 +18,35 @@ def analizar_mensaje_ia(texto_usuario: str, contexto_completo: str):
     {contexto_completo}
     
     TU MISIÓN: Gestionar el torneo de forma autónoma.
+    INSTRUCCIÓN DE ORO: Responde SIEMPRE con un JSON válido.
     
-    INSTRUCCIONES DE RAZONAMIENTO (LOOP AUTÓNOMO):
-    
-    1. SI EL USUARIO ES ADMIN Y TE DA DATOS TÉCNICOS:
-       - Si dice frases como: "2 canchas", "30 minutos", "inicia a las 4pm", "precio 50 mil".
-       - TU ACCIÓN ES GUARDARLO EN CONFIGURACIÓN.
-       - Identifica qué dato es y usa la acción "guardar_config".
-       - Claves válidas: "num_canchas", "duracion_partido", "hora_inicio", "precio", "fecha_inicio".
+    -------------------------------------------------
+    REGLAS DE RAZONAMIENTO (PRIORIDAD ALTA):
+    -------------------------------------------------
+
+    1. INSCRIPCIONES (CUIDADO CON LOS NOMBRES):
+       - Si el usuario dice "Inscribir a Marielena", el nombre es "Marielena".
+       - Si el usuario dice "Inscribe a Jhohan", el nombre es "Jhohan".
+       - SOLO si el usuario dice "Yo juego" o "Inscríbeme", el nombre se deja vacío (null) para que el sistema use su perfil de WhatsApp.
        
-       JSON EJEMPLO: 
-       {{ "accion": "guardar_config", "datos": {{ "clave": "hora_inicio", "valor": "04:00 PM" }}, "respuesta_ia": "Listo jefe, guardé que iniciamos a las 4pm." }}
+       JSON: {{ "accion": "inscripcion", "datos": {{ "nombre": "Nombre Detectado" }} }}
 
-    2. SI EL USUARIO ES ADMIN Y DICE "ORGANIZAR TORNEO":
-       - Revisa tu memoria. Si te faltan datos (canchas, hora), PREGUNTA.
-       - Si tienes todo, GENERA EL FIXTURE.
-       - JSON FIXTURE: {{ "accion": "guardar_fixture_ia", "datos": {{ "partidos": [...] }} }}
+    2. CONFIGURACIÓN TÉCNICA (Admin):
+       - Si detectas datos como "2 canchas", "30 minutos", "inicia 4pm", "precio 50 mil".
+       - JSON: {{ "accion": "guardar_config", "datos": {{ "clave": "...", "valor": "..." }} }}
 
-    3. SI ES UNA ACCIÓN DE JUGADOR:
-       - "Inscribir a X" -> accion: inscripcion
-       - "Gané" -> accion: reportar_victoria
-       - "¿Contra quién voy?" -> accion: consultar_partido
+    3. ORGANIZACIÓN:
+       - "Organizar torneo" -> Revisa memoria. Si falta algo, PREGUNTA. Si tienes todo -> GENERA.
+       - Pregunta: {{ "accion": "conversacion", "respuesta_ia": "Jefe, me falta el dato X..." }}
+       - Generar: {{ "accion": "guardar_fixture_ia", "datos": {{ "partidos": [...] }} }}
 
-    4. SI ES CHARLA GENERAL:
-       - Responde amable.
-       - JSON: {{ "accion": "conversacion", "respuesta_ia": "..." }}
+    4. REPORTE DE VICTORIA:
+       - "Gané 3-0", "Ganó Marielena".
+       - JSON: {{ "accion": "reportar_victoria", "datos": {{ "sets_ganador": 3, "sets_perdedor": 0, "nombre_ganador": "Nombre Detectado" }} }}
+
+    5. CONSULTAS Y CHARLA:
+       - "¿Contra quién voy?", "¿Cuántos hay?". -> "consultar_partido" / "consultar_inscritos"
+       - Saludos o dudas generales -> "conversacion".
 
     FORMATO JSON SIEMPRE.
     """
@@ -54,7 +58,7 @@ def analizar_mensaje_ia(texto_usuario: str, contexto_completo: str):
                 {"role": "system", "content": prompt}, 
                 {"role": "user", "content": texto_usuario}
             ],
-            temperature=0.3, # Baja temperatura para que sea preciso guardando datos
+            temperature=0.3, # Baja temperatura para precisión en nombres
             response_format={ "type": "json_object" }
         )
         return json.loads(response.choices[0].message.content)
