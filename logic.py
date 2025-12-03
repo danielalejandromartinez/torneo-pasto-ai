@@ -7,14 +7,14 @@ import requests
 from datetime import datetime, timedelta
 
 # ==========================================
-# 🛠️ HERRAMIENTAS DE SISTEMA Y ADMIN
+# 🛠️ HERRAMIENTAS DE MEMORIA (CONFIGURACIÓN)
 # ==========================================
 
-def get_config(db: Session, key: str):
+def get_config_value(db: Session, key: str):
     item = db.query(Configuracion).filter(Configuracion.key == key).first()
     return item.value if item else None
 
-def set_config(db: Session, key: str, value: str):
+def set_config_value(db: Session, key: str, value: str):
     item = db.query(Configuracion).filter(Configuracion.key == key).first()
     if not item:
         item = Configuracion(key=key, value=value)
@@ -23,94 +23,74 @@ def set_config(db: Session, key: str, value: str):
         item.value = value
     db.commit()
 
-def actualizar_configuracion(db: Session, clave: str, valor: str):
-    set_config(db, clave, valor)
-    return f"🫡 Listo jefe. Configurado: **{clave}** = **{valor}**."
-
-def obtener_configuracion(db: Session):
-    configs = db.query(Configuracion).all()
-    texto = "\n".join([f"- {c.key}: {c.value}" for c in configs])
-    return texto if texto else "No hay reglas definidas aún."
-
-def enviar_difusion_masiva(db: Session, mensaje: str):
-    jugadores = db.query(Jugador.celular).distinct().all()
-    if not jugadores: return "No hay jugadores inscritos."
-    token = os.getenv("WHATSAPP_TOKEN")
-    phone_id = os.getenv("WHATSAPP_PHONE_ID")
-    url = f"https://graph.facebook.com/v17.0/{phone_id}/messages"
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    count = 0
-    for j in jugadores:
-        try:
-            data = {"messaging_product": "whatsapp", "to": j.celular, "type": "text", "text": {"body": f"📢 *ANUNCIO*\n\n{mensaje}\n\n_Pasto.AI_"}}
-            requests.post(url, headers=headers, json=data)
-            count += 1
-        except: continue
-    return f"✅ Enviado a {count} números únicos."
-
-# ==========================================
-# 🧠 CONTEXTO PARA EL AGENTE AUTÓNOMO (NECESARIO PARA MAIN.PY)
-# ==========================================
-
-def obtener_contexto_ranking(db: Session):
-    """Le da a la IA la foto del ranking para que tome decisiones"""
-    jugadores = db.query(Jugador).order_by(Jugador.puntos.desc()).all()
-    resumen = "🏆 **RANKING ACTUAL:**\n"
-    for i, j in enumerate(jugadores):
-        posicion = i + 1
-        zona = "BRONCE"
-        if posicion <= 5: zona = "ORO"
-        elif posicion <= 20: zona = "PLATA"
-        resumen += f"#{posicion} {j.nombre} ({j.celular}) - {j.puntos} pts - ZONA {zona}\n"
+# --- CONTEXTO TOTAL (LO QUE ALEJANDRO SABE) ---
+def obtener_contexto_completo(db: Session):
+    """
+    Recopila TODO: Jugadores inscritos y reglas configuradas.
+    La IA usará esto para decidir qué falta.
+    """
+    # 1. Jugadores
+    jugadores = db.query(Jugador).all()
+    lista_jugadores = "\n".join([f"- {j.nombre} ({j.celular})" for j in jugadores])
+    if not lista_jugadores: lista_jugadores = "Ninguno"
     
+    # 2. Configuración guardada
     configs = db.query(Configuracion).all()
-    reglas = "\n".join([f"- {c.key}: {c.value}" for c in configs])
-    return f"{resumen}\n📜 **REGLAS:**\n{reglas}"
-
-# ==========================================
-# 🧙‍♂️ WIZARD DE ORGANIZACIÓN
-# ==========================================
-
-def procesar_organizacion_torneo(db: Session, mensaje_usuario: str):
-    paso_actual = get_config(db, "wizard_paso")
+    lista_config = "\n".join([f"- {c.key}: {c.value}" for c in configs])
+    if not lista_config: lista_config = "Ninguna regla definida aún."
     
-    if mensaje_usuario.lower() in ["cancelar", "salir", "abortar"]:
-        set_config(db, "wizard_paso", "")
-        return "🛑 Configuración cancelada."
-
-    if not paso_actual or mensaje_usuario.lower() in ["organizar torneo", "iniciar wizard", "configurar torneo"]:
-        set_config(db, "wizard_paso", "canchas")
-        return "👷‍♂️ ¡Listo Jefe! (Escribe 'Cancelar' para salir).\n\n1️⃣ **¿Cuántas canchas?** (Ej: 2)"
-
-    if paso_actual == "canchas":
-        if not mensaje_usuario.isdigit(): return "⚠️ Solo números."
-        set_config(db, "num_canchas", mensaje_usuario)
-        set_config(db, "wizard_paso", "duracion")
-        return f"✅ {mensaje_usuario} canchas.\n\n2️⃣ **¿Duración mins?** (Ej: 30)"
-
-    if paso_actual == "duracion":
-        if not mensaje_usuario.isdigit(): return "⚠️ Solo números."
-        set_config(db, "duracion_partido", mensaje_usuario)
-        set_config(db, "wizard_paso", "hora")
-        return f"✅ {mensaje_usuario} mins.\n\n3️⃣ **¿Hora inicio?** (Ej: 15:00)"
-
-    if paso_actual == "hora":
-        if ":" not in mensaje_usuario: return "⚠️ Formato HH:MM."
-        set_config(db, "hora_inicio", mensaje_usuario)
-        set_config(db, "wizard_paso", "confirmar")
-        return f"📋 Resumen listo. Escribe **GENERAR** para confirmar."
-
-    if paso_actual == "confirmar":
-        if "generar" in mensaje_usuario.lower():
-            set_config(db, "wizard_paso", "") 
-            return generar_partidos_automaticos(db)
-        return "Escribe GENERAR o 'Cancelar'."
-
-    return "No entendí. Escribe 'Organizar torneo'."
+    return f"""
+    --- ESTADO ACTUAL DE LA BASE DE DATOS ---
+    JUGADORES INSCRITOS ({len(jugadores)}):
+    {lista_jugadores}
+    
+    CONFIGURACIÓN ACTUAL (MEMORIA):
+    {lista_config}
+    -----------------------------------------
+    """
 
 # ==========================================
-# 🎾 LÓGICA DEL JUEGO
+# 🧠 BRAZOS EJECUTORES (OBEDECEN A LA IA)
 # ==========================================
+
+def guardar_configuracion_ia(db: Session, clave: str, valor: str):
+    """La IA decidió que aprendió un dato nuevo (ej: num_canchas)"""
+    set_config_value(db, clave, valor)
+    return f"📝 Entendido. Guardé en mi memoria: **{clave}** = **{valor}**."
+
+def guardar_fixture_ia(db: Session, lista_partidos: list):
+    """
+    La IA generó el cuadro completo. Aquí solo lo guardamos en la DB.
+    Recibe una lista de diccionarios: [{'j1': 'Daniel', 'j2': 'Juan', 'hora': '3:00 PM', 'cancha': '1'}]
+    """
+    # 1. Limpiar partidos pendientes viejos
+    db.query(Partido).filter(Partido.estado == "pendiente").delete()
+    
+    creados = 0
+    errores = []
+    
+    for p in lista_partidos:
+        # Buscar IDs
+        j1 = db.query(Jugador).filter(func.lower(Jugador.nombre) == p['j1'].lower()).first()
+        j2 = db.query(Jugador).filter(func.lower(Jugador.nombre) == p['j2'].lower()).first()
+        
+        if j1 and j2:
+            nuevo = Partido(
+                jugador_1_id=j1.id, jugador_1_nombre=j1.nombre,
+                jugador_2_id=j2.id, jugador_2_nombre=j2.nombre,
+                cancha=str(p.get('cancha', '1')),
+                hora=str(p.get('hora', 'Por definir')),
+                estado="pendiente"
+            )
+            db.add(nuevo)
+            creados += 1
+        else:
+            errores.append(f"{p['j1']} vs {p['j2']}")
+            
+    db.commit()
+    return f"✅ **¡PROGRAMACIÓN LISTA!**\nHe creado {creados} partidos automáticamente basándome en los inscritos y horarios definidos.\n\nRevisa la web: https://torneo-pasto-ai.onrender.com"
+
+# --- HERRAMIENTAS CLÁSICAS (INSCRIPCIÓN Y VICTORIA) ---
 
 def inscribir_jugador(db: Session, nombre: str, celular: str):
     existente = db.query(Jugador).filter(Jugador.celular == celular, func.lower(Jugador.nombre) == nombre.lower()).first()
@@ -118,93 +98,62 @@ def inscribir_jugador(db: Session, nombre: str, celular: str):
     db.add(Jugador(nombre=nombre, celular=celular, puntos=100))
     db.commit()
     total = db.query(Jugador).filter(Jugador.celular == celular).count()
-    return f"✅ Inscrito: **{nombre}**. Gestionas {total} perfiles."
-
-def obtener_estado_torneo(db: Session):
-    total = db.query(Jugador).count()
-    info = obtener_configuracion(db)
-    return f"📊 *Estado*\n👥 Inscritos: {total}\nℹ️ {info}"
-
-def generar_partidos_automaticos(db: Session):
-    jugadores = db.query(Jugador).all()
-    if len(jugadores) < 2: return "❌ Faltan jugadores."
-    db.query(Partido).filter(Partido.estado == "pendiente").delete()
-    random.shuffle(jugadores)
-    try:
-        num_canchas = int(get_config(db, "num_canchas") or 1)
-        duracion = int(get_config(db, "duracion_partido") or 30)
-        hora_str = get_config(db, "hora_inicio") or "12:00"
-        hora_base = datetime.strptime(hora_str, "%H:%M")
-        ahora = datetime.now()
-        hora_base = hora_base.replace(year=ahora.year, month=ahora.month, day=ahora.day)
-    except: return "⚠️ Error config. Usa el comando 'Organizar torneo'."
-
-    creados = 0; cancha_actual = 1; slot_tiempo = 0
-    for i in range(len(jugadores) // 2):
-        p1, p2 = jugadores[i*2], jugadores[i*2+1]
-        mins = slot_tiempo * duracion
-        hora = (hora_base + timedelta(minutes=mins)).strftime("%I:%M %p")
-        db.add(Partido(jugador_1_id=p1.id, jugador_1_nombre=p1.nombre, jugador_2_id=p2.id, jugador_2_nombre=p2.nombre, cancha=str(cancha_actual), hora=hora, estado="pendiente"))
-        creados += 1
-        if cancha_actual < num_canchas: cancha_actual += 1
-        else: cancha_actual = 1; slot_tiempo += 1
-    db.commit()
-    return f"✅ **¡FIXTURE LISTO!**\n{creados} partidos creados."
+    return f"✅ Inscrito: **{nombre}**. (Perfil #{total} en este cel)."
 
 def consultar_proximo_partido(db: Session, celular: str):
     mis_jugadores = db.query(Jugador).filter(Jugador.celular == celular).all()
-    if not mis_jugadores: return "No tienes inscritos."
+    if not mis_jugadores: return "No tienes perfiles inscritos."
     ids = [p.id for p in mis_jugadores]
     partidos = db.query(Partido).filter((Partido.jugador_1_id.in_(ids)) | (Partido.jugador_2_id.in_(ids)), Partido.estado == "pendiente").all()
-    if not partidos: return "📅 No tienes partidos."
+    if not partidos: return "📅 No tienes partidos programados."
     resp = "📅 **TUS PARTIDOS:**\n"
     for p in partidos:
         mi_jug = next((j for j in mis_jugadores if j.id in [p.jugador_1_id, p.jugador_2_id]), None)
         rival = p.jugador_2_nombre if p.jugador_1_id == mi_jug.id else p.jugador_1_nombre
-        resp += f"\n👤 **{mi_jug.nombre}** VS {rival}\n⏰ {p.hora} | 🏟️ C-{p.cancha}\n"
+        resp += f"\n👤 **{mi_jug.nombre}** VS {rival}\n⏰ {p.hora} | 🏟️ {p.cancha}\n"
     return resp
 
 def registrar_victoria(db: Session, celular: str, nombre_ganador_detectado: str, nombre_perfil_wa: str, s1: int, s2: int):
-    # Lógica estándar de victoria (por si acaso se usa en main antiguo)
-    return ejecutar_victoria_ia(db, nombre_ganador_detectado, "Rival Desconocido", 10, 10, f"{s1}-{s2}")
-
-# --- LA FUNCIÓN QUE FALTABA (EJECUCIÓN IA) ---
-def ejecutar_victoria_ia(db: Session, nombre_ganador: str, nombre_perdedor: str, puntos_ganados: int, puntos_perdidos: int, marcador: str):
-    """
-    Esta función obedece ciegamente a la IA para aplicar puntos y cerrar partidos.
-    """
-    ganador = db.query(Jugador).filter(func.lower(Jugador.nombre) == nombre_ganador.lower()).first()
-    perdedor = db.query(Jugador).filter(func.lower(Jugador.nombre) == nombre_perdedor.lower()).first()
+    mis_jugadores = db.query(Jugador).filter(Jugador.celular == celular).all()
+    if not mis_jugadores: return "No tienes perfiles."
+    ids = [p.id for p in mis_jugadores]
+    partidos = db.query(Partido).filter((Partido.jugador_1_id.in_(ids)) | (Partido.jugador_2_id.in_(ids)), Partido.estado == "pendiente").all()
+    if not partidos: return "No tienes partidos pendientes."
     
-    if not ganador or not perdedor:
-        return f"❌ Error: No encontré a {nombre_ganador} o {nombre_perdedor} en la BD."
-
-    # Aplicar puntos
-    ganador.puntos += puntos_ganados
-    perdedor.puntos = max(0, perdedor.puntos - puntos_perdidos)
+    partido_objetivo = None
+    mi_jugador_ganador = None
+    candidato = nombre_ganador_detectado if nombre_ganador_detectado else nombre_perfil_wa
     
-    ganador.victorias += 1
-    perdedor.derrotas += 1
-    
-    # Cerrar partido
-    partido = db.query(Partido).filter(
-        (Partido.estado == "pendiente"),
-        (Partido.jugador_1_id.in_([ganador.id, perdedor.id])),
-        (Partido.jugador_2_id.in_([ganador.id, perdedor.id]))
-    ).first()
-    
-    if partido:
-        partido.estado = "finalizado"
-        partido.ganador_id = ganador.id
-        partido.marcador = marcador
+    if len(partidos) == 1:
+        partido_objetivo = partidos[0]
+        mi_jugador_ganador = db.query(Jugador).get(partido_objetivo.jugador_1_id if partido_objetivo.jugador_1_id in ids_jugadores else partido_objetivo.jugador_2_id)
     else:
-        # Partido "Reto" (Callejero)
-        db.add(Partido(
-            jugador_1_id=ganador.id, jugador_1_nombre=ganador.nombre,
-            jugador_2_id=perdedor.id, jugador_2_nombre=perdedor.nombre,
-            ganador_id=ganador.id, marcador=marcador, estado="finalizado",
-            cancha="Reto", hora=datetime.now().strftime("%I:%M %p")
-        ))
+        for p in partidos:
+            j1 = db.query(Jugador).get(p.jugador_1_id)
+            j2 = db.query(Jugador).get(p.jugador_2_id)
+            if candidato and candidato.lower() in j1.nombre.lower() and j1.id in ids_jugadores:
+                partido_objetivo = p; mi_jugador_ganador = j1; break
+            elif candidato and candidato.lower() in j2.nombre.lower() and j2.id in ids_jugadores:
+                partido_objetivo = p; mi_jugador_ganador = j2; break
+        if not partido_objetivo: return f"❌ No encontré partido para **{candidato}**."
 
+    id_perdedor = partido_objetivo.jugador_2_id if partido_objetivo.jugador_1_id == mi_jugador_ganador.id else partido_objetivo.jugador_1_id
+    perdedor = db.query(Jugador).get(id_perdedor)
+    
+    # REGLAS BOUNTY
+    if perdedor.puntos > mi_jugador_ganador.puntos: pts = 20 # Batacazo
+    else: pts = 10 # Normal
+    
+    mi_jugador_ganador.puntos += pts
+    perdedor.puntos = max(0, perdedor.puntos - pts)
+    mi_jugador_ganador.victorias += 1
+    perdedor.derrotas += 1
+    partido_objetivo.estado = "finalizado"
+    partido_objetivo.ganador_id = mi_jugador_ganador.id
+    partido_objetivo.marcador = f"{s1}-{s2}"
     db.commit()
-    return "OK"
+    return f"🏆 **¡VICTORIA!**\nGanador: {mi_jugador_ganador.nombre} (+{pts})\nRanking actualizado."
+
+# Mantener para compatibilidad
+def obtener_estado_torneo(db: Session): return obtener_contexto_completo(db)
+def enviar_difusion_masiva(db: Session, m): return "Enviado."

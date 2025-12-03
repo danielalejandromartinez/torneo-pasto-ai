@@ -8,11 +8,11 @@ from sqlalchemy.orm import Session
 from database import SessionLocal, engine
 import models
 from ai_agent import analizar_mensaje_ia
-# Importamos la nueva función de contexto
 from logic import (
-    inscribir_jugador, generar_partidos_automaticos, consultar_proximo_partido, 
-    ejecutar_victoria_ia, obtener_estado_torneo, obtener_contexto_ranking, # OJO A ESTA
-    actualizar_configuracion, enviar_difusion_masiva, procesar_organizacion_torneo
+    inscribir_jugador, consultar_proximo_partido, registrar_victoria, 
+    obtener_contexto_completo, # Nuevo contexto total
+    guardar_configuracion_ia, guardar_fixture_ia, # Nuevas funciones autónomas
+    enviar_difusion_masiva
 )
 
 models.Base.metadata.create_all(bind=engine)
@@ -31,7 +31,6 @@ def enviar_whatsapp(numero, texto):
         url = f"https://graph.facebook.com/v17.0/{phone_id}/messages"
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         
-        # Firma profesional
         if len(texto) > 40:
             texto_final = f"{texto}\n\n━━━━━━━━━━━━━━━━\n🚀 *Desarrollado por Pasto.AI*\nSoluciones de IA para Profesionales"
         else:
@@ -45,7 +44,8 @@ def enviar_whatsapp(numero, texto):
 @app.get("/")
 def dashboard(request: Request, db: Session = Depends(get_db)):
     jugadores = db.query(models.Jugador).order_by(models.Jugador.puntos.desc()).all()
-    return templates.TemplateResponse("ranking.html", {"request": request, "jugadores": jugadores})
+    partidos = db.query(models.Partido).all()
+    return templates.TemplateResponse("ranking.html", {"request": request, "jugadores": jugadores, "partidos": partidos})
 
 @app.get("/programacion")
 def ver_programacion(request: Request, db: Session = Depends(get_db)):
@@ -78,63 +78,56 @@ async def recibir(request: Request, db: Session = Depends(get_db)):
 
                 print(f"📩 {nombre_wa}: {texto}")
                 
-                # 1. OBTENER LA FOTO COMPLETA DEL TORNEO (Ranking actual)
-                contexto_total = obtener_contexto_ranking(db)
+                # 1. LEER MEMORIA TOTAL (Jugadores + Config)
+                contexto = obtener_contexto_completo(db)
                 
-                # 2. IA ANALIZA Y DECIDE TODO
-                analisis = analizar_mensaje_ia(texto, contexto_total)
-                
+                # 2. CEREBRO AUTÓNOMO DECIDE
+                analisis = analizar_mensaje_ia(texto, contexto)
                 accion = analisis.get("accion")
                 datos = analisis.get("datos", {})
-                # La IA ahora genera el mensaje de respuesta ella misma
-                respuesta_ia = analisis.get("respuesta_ia", "")
                 
-                print(f"🧠 ACCIÓN: {accion}")
+                print(f"🧠 ACCIÓN IA: {accion}")
                 
+                respuesta = ""
                 es_admin = str(numero) == str(os.getenv("ADMIN_PHONE"))
 
                 # --- EJECUCIÓN ---
-                
-                if accion == "ejecutar_victoria_ia":
-                    # La IA ya calculó los puntos, Python solo guarda
-                    res_db = ejecutar_victoria_ia(
-                        db, 
-                        datos.get("nombre_ganador"), 
-                        datos.get("nombre_perdedor"), 
-                        datos.get("puntos_ganados"), 
-                        datos.get("puntos_perdidos"), 
-                        datos.get("marcador", "3-0")
-                    )
-                    # Si guardó bien, usamos el mensaje emocionante de la IA
-                    if res_db == "OK":
-                        respuesta_final = respuesta_ia
+                if accion == "conversacion":
+                    respuesta = analisis.get("respuesta_ia", "Hola")
+
+                elif accion == "guardar_config":
+                    if es_admin:
+                        respuesta = guardar_configuracion_ia(db, datos.get("clave"), datos.get("valor"))
                     else:
-                        respuesta_final = f"⚠️ {res_db}"
+                        respuesta = "❌ Solo el admin configura."
+
+                elif accion == "guardar_fixture_ia":
+                    if es_admin:
+                        # La IA ya mandó la lista de partidos en el JSON
+                        respuesta = guardar_fixture_ia(db, datos.get("partidos", []))
+                    else:
+                        respuesta = "❌ Solo el admin organiza."
 
                 elif accion == "inscripcion":
                     nombre_real = datos.get("nombre", nombre_wa)
                     if not nombre_real or nombre_real == "Jugador": nombre_real = nombre_wa
-                    respuesta_final = inscribir_jugador(db, nombre_real, numero)
+                    respuesta = inscribir_jugador(db, nombre_real, numero)
                 
-                elif accion == "conversacion":
-                    respuesta_final = respuesta_ia
-
-                elif accion == "consultar_inscritos":
-                    respuesta_final = obtener_estado_torneo(db)
-
                 elif accion == "consultar_partido":
-                    respuesta_final = consultar_proximo_partido(db, numero)
+                    respuesta = consultar_proximo_partido(db, numero)
+                
+                elif accion == "reportar_victoria":
+                    nombre_ganador = datos.get("nombre_ganador", "")
+                    respuesta = registrar_victoria(db, numero, nombre_ganador, nombre_wa, datos.get("sets_ganador", 3), datos.get("sets_perdedor", 0))
 
                 elif accion == "admin_iniciar":
-                    if es_admin:
-                        respuesta_final = generar_partidos_automaticos(db)
-                    else: respuesta_final = "❌ Solo Admin."
+                    # Este caso es cuando la IA decide que necesita preguntar algo
+                    # Simplemente pasamos su respuesta conversacional (la pregunta)
+                    # O si decidió organizar, habrá mandado 'guardar_fixture_ia'
+                    respuesta = analisis.get("respuesta_ia", "Comando procesado.")
 
-                else:
-                    respuesta_final = respuesta_ia if respuesta_ia else "Procesado."
-
-                # Enviar
-                enviar_whatsapp(numero, respuesta_final)
+                if respuesta:
+                    enviar_whatsapp(numero, respuesta)
 
     except Exception as e:
         print(f"🔥 Error: {e}")
