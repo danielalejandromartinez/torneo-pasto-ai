@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from database import SessionLocal, engine
 import models
 from ai_agent import analizar_mensaje_ia
-# Importamos TODAS las herramientas necesarias
+# Importamos TODO para evitar errores de "nombre no encontrado"
 from logic import (
     inscribir_jugador, generar_partidos_automaticos, consultar_proximo_partido, 
     registrar_victoria, obtener_estado_torneo, obtener_contexto_completo,
@@ -27,40 +27,20 @@ def get_db():
 
 def enviar_whatsapp(numero, texto):
     try:
-        print(f"🚀 INTENTANDO ENVIAR A {numero}...")
         token = os.getenv("WHATSAPP_TOKEN")
         phone_id = os.getenv("WHATSAPP_PHONE_ID")
-        
-        if not token or not phone_id:
-            print("❌ ERROR: Faltan credenciales en Render.")
-            return
-
         url = f"https://graph.facebook.com/v17.0/{phone_id}/messages"
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-        
-        # Firma profesional solo en mensajes largos
         if len(texto) > 40:
-            texto_final = f"{texto}\n\n━━━━━━━━━━━━━━━━\n🚀 *Desarrollado por Pasto.AI*\nSoluciones de IA para Profesionales"
-        else:
-            texto_final = texto
-            
-        data = {"messaging_product": "whatsapp", "to": numero, "type": "text", "text": {"body": texto_final}}
-        
-        response = requests.post(url, headers=headers, json=data)
-        
-        if response.status_code == 200:
-            print("✅ MENSAJE ENTREGADO A META.")
-        else:
-            print(f"❌ ERROR META ({response.status_code}): {response.text}")
-            
-    except Exception as e:
-        print(f"❌ Error en función enviar_whatsapp: {e}")
+            texto += "\n\n━━━━━━━━━━━━━━━━\n🚀 *Pasto.AI*"
+        data = {"messaging_product": "whatsapp", "to": numero, "type": "text", "text": {"body": texto}}
+        requests.post(url, headers=headers, json=data)
+    except: pass
 
 @app.get("/")
 def dashboard(request: Request, db: Session = Depends(get_db)):
     jugadores = db.query(models.Jugador).order_by(models.Jugador.puntos.desc()).all()
-    partidos = db.query(models.Partido).all()
-    return templates.TemplateResponse("ranking.html", {"request": request, "jugadores": jugadores, "partidos": partidos})
+    return templates.TemplateResponse("ranking.html", {"request": request, "jugadores": jugadores})
 
 @app.get("/programacion")
 def ver_programacion(request: Request, db: Session = Depends(get_db)):
@@ -91,30 +71,25 @@ async def recibir(request: Request, db: Session = Depends(get_db)):
                 if "contacts" in value:
                     nombre_wa = value["contacts"][0]["profile"]["name"]
 
-                print(f"📩 MENSAJE DE {nombre_wa}: {texto}")
+                print(f"📩 {nombre_wa}: {texto}")
                 
-                # Contexto completo para el Agente Autónomo
                 contexto = obtener_contexto_completo(db)
                 analisis = analizar_mensaje_ia(texto, contexto)
                 
-                # Limpiamos la acción
-                accion_raw = analisis.get("accion", "conversacion")
-                accion = str(accion_raw).strip().lower()
-                
+                accion = str(analisis.get("accion", "conversacion")).strip().lower()
                 datos = analisis.get("datos", {})
-                print(f"🧠 CEREBRO PENSÓ: '{accion}'")
+                
+                print(f"🧠 ACCIÓN: {accion}")
                 
                 respuesta = ""
                 es_admin = str(numero) == str(os.getenv("ADMIN_PHONE"))
 
-                # --- MÁQUINA DE RESPUESTAS ---
-                
                 if accion == "conversacion":
                     respuesta = analisis.get("respuesta_ia", "Hola")
 
                 elif accion == "inscripcion":
                     nombre_real = datos.get("nombre", nombre_wa)
-                    if nombre_real == "Jugador" or not nombre_real: nombre_real = nombre_wa
+                    if nombre_real == "Jugador": nombre_real = nombre_wa
                     respuesta = inscribir_jugador(db, nombre_real, numero)
                 
                 elif accion == "consultar_inscritos":
@@ -124,48 +99,38 @@ async def recibir(request: Request, db: Session = Depends(get_db)):
                     respuesta = consultar_proximo_partido(db, numero)
                 
                 elif accion == "reportar_victoria":
-                    nombre_ganador = datos.get("nombre_ganador", "")
-                    respuesta = registrar_victoria(db, numero, nombre_ganador, nombre_wa, datos.get("sets_ganador", 3), datos.get("sets_perdedor", 0))
+                    n_ganador = datos.get("nombre_ganador", "")
+                    respuesta = registrar_victoria(db, numero, n_ganador, nombre_wa, datos.get("sets_ganador", 3), datos.get("sets_perdedor", 0))
 
-                # --- ACCIONES AUTÓNOMAS Y ADMIN ---
                 elif accion == "guardar_config":
                     if es_admin:
-                        # Guardamos pero respondemos con lo que dijo la IA
                         guardar_configuracion_ia(db, datos.get("clave"), datos.get("valor"))
-                        respuesta = analisis.get("respuesta_ia", "Configuración guardada.")
-                    else:
-                        respuesta = "❌ Solo el admin configura."
+                        respuesta = analisis.get("respuesta_ia", "Configurado.")
+                    else: respuesta = "❌ Solo Admin."
 
                 elif accion == "guardar_fixture_ia":
                     if es_admin:
                         guardar_organizacion_ia(db, datos.get("partidos", []))
-                        respuesta = analisis.get("respuesta_ia", "Fixture guardado.")
-                    else:
-                        respuesta = "❌ Solo el admin organiza."
+                        respuesta = analisis.get("respuesta_ia", "Fixture listo.")
+                    else: respuesta = "❌ Solo Admin."
 
                 elif accion == "admin_iniciar":
-                    # Si la IA pide iniciar, revisamos si tiene mensaje para el usuario
-                    respuesta_ia = analisis.get("respuesta_ia")
-                    if respuesta_ia:
-                        respuesta = respuesta_ia
+                    # Si la IA manda un mensaje (ej: preguntar hora), lo enviamos
+                    if analisis.get("respuesta_ia"):
+                        respuesta = analisis.get("respuesta_ia")
                     else:
-                        respuesta = "Procesando comando de inicio..."
-                
-                else:
-                    # Si la acción no coincide, usamos la respuesta por defecto de la IA
-                    print(f"⚠️ Acción '{accion}' no mapeada. Usando respuesta IA.")
-                    respuesta = analisis.get("respuesta_ia", "No entendí tu solicitud.")
+                        # Si no, asumimos modo manual
+                        respuesta = generar_partidos_automaticos(db)
 
-                # --- MOMENTO DE LA VERDAD ---
-                if respuesta:
-                    print(f"📝 RESPUESTA GENERADA: {respuesta[:30]}...")
-                    enviar_whatsapp(numero, respuesta)
-                else:
-                    print("⚠️ ALERTA CRÍTICA: La variable 'respuesta' está vacía.")
+                # Si después de todo esto no hay respuesta generada por Python,
+                # usamos la que generó la IA por defecto
+                if not respuesta:
+                    respuesta = analisis.get("respuesta_ia", "Procesado.")
+
+                enviar_whatsapp(numero, respuesta)
 
     except Exception as e:
-        # AQUÍ ESTABA EL PROBLEMA ANTES (Faltaba este bloque)
-        print(f"🔥 Error Servidor: {e}")
+        print(f"🔥 Error: {e}")
         traceback.print_exc()
         
     return {"status": "ok"}
