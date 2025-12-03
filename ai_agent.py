@@ -8,7 +8,7 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 def analizar_mensaje_ia(texto_usuario: str, contexto_completo: str):
     """
-    Agente Autónomo Gerencial.
+    Agente Autónomo Gerencial v2 (Con capacidad de aprendizaje).
     """
     
     prompt = f"""
@@ -21,42 +21,28 @@ def analizar_mensaje_ia(texto_usuario: str, contexto_completo: str):
     
     INSTRUCCIONES DE RAZONAMIENTO (LOOP AUTÓNOMO):
     
-    1. SI EL USUARIO ES ADMIN Y DICE "ORGANIZAR TORNEO" (O similar):
-       - Revisa tu MEMORIA.
-       - ¿Tienes configurado "num_canchas"?
-       - ¿Tienes configurado "duracion_partido"?
-       - ¿Tienes configurado "hora_inicio"?
+    1. SI EL USUARIO ES ADMIN Y TE DA DATOS TÉCNICOS:
+       - Si dice frases como: "2 canchas", "30 minutos", "inicia a las 4pm", "precio 50 mil".
+       - TU ACCIÓN ES GUARDARLO EN CONFIGURACIÓN.
+       - Identifica qué dato es y usa la acción "guardar_config".
+       - Claves válidas: "num_canchas", "duracion_partido", "hora_inicio", "precio", "fecha_inicio".
        
-       SI TE FALTA ALGO:
-       - No intentes adivinar. Tu acción es PREGUNTARLE al admin.
-       - JSON: {{ "accion": "conversacion", "respuesta_ia": "Jefe, para organizar necesito un dato: [Pregunta el dato que falta]" }}
-       
-       SI TIENES TODO:
-       - Actúa como experto. Crea los emparejamientos (Round Robin o Llaves) y asigna horarios y canchas automáticamente.
-       - JSON: {{ 
-           "accion": "guardar_fixture_ia", 
-           "datos": {{ 
-               "partidos": [ 
-                   {{"j1": "Nombre1", "j2": "Nombre2", "hora": "3:00 PM", "cancha": "1"}},
-                   {{"j1": "Nombre3", "j2": "Nombre4", "hora": "3:00 PM", "cancha": "2"}}
-                   ... (Todos los partidos necesarios)
-               ] 
-           }} 
-         }}
+       JSON EJEMPLO: 
+       {{ "accion": "guardar_config", "datos": {{ "clave": "hora_inicio", "valor": "04:00 PM" }}, "respuesta_ia": "Listo jefe, guardé que iniciamos a las 4pm." }}
 
-    2. SI EL USUARIO RESPONDE UN DATO (Ej: "2 canchas", "30 minutos"):
-       - Detecta qué dato es y guárdalo en configuración.
-       - JSON: {{ "accion": "guardar_config", "datos": {{ "clave": "num_canchas (o el que corresponda)", "valor": "valor detectado" }} }}
+    2. SI EL USUARIO ES ADMIN Y DICE "ORGANIZAR TORNEO":
+       - Revisa tu memoria. Si te faltan datos (canchas, hora), PREGUNTA.
+       - Si tienes todo, GENERA EL FIXTURE.
+       - JSON FIXTURE: {{ "accion": "guardar_fixture_ia", "datos": {{ "partidos": [...] }} }}
 
-    3. SI ES UNA ACCIÓN DE JUGADOR (Inscripción, Victoria, Consulta):
-       - Aplica la lógica estándar.
+    3. SI ES UNA ACCIÓN DE JUGADOR:
        - "Inscribir a X" -> accion: inscripcion
        - "Gané" -> accion: reportar_victoria
        - "¿Contra quién voy?" -> accion: consultar_partido
 
     4. SI ES CHARLA GENERAL:
-       - Responde amable y profesionalmente.
-       - Web: https://pasto-ai-web.onrender.com/
+       - Responde amable.
+       - JSON: {{ "accion": "conversacion", "respuesta_ia": "..." }}
 
     FORMATO JSON SIEMPRE.
     """
@@ -68,7 +54,7 @@ def analizar_mensaje_ia(texto_usuario: str, contexto_completo: str):
                 {"role": "system", "content": prompt}, 
                 {"role": "user", "content": texto_usuario}
             ],
-            temperature=0.4, # Un poco de creatividad para organizar
+            temperature=0.3, # Baja temperatura para que sea preciso guardando datos
             response_format={ "type": "json_object" }
         )
         return json.loads(response.choices[0].message.content)
