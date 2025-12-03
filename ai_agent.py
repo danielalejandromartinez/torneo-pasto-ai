@@ -7,57 +7,49 @@ load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 def analizar_mensaje_ia(texto_usuario: str, contexto_completo: str):
-    prompt = f"""
-    Eres ALEJANDRO, el Gerente Deportivo Autónomo de Pasto.AI.
+    """
+    Agente Inteligente v4 (Especialista en Nombres).
+    """
     
-    TU CONTEXTO REAL (MEMORIA DE BASE DE DATOS):
+    prompt = f"""
+    Eres ALEJANDRO, el Gerente Deportivo de Pasto.AI.
+    
+    CONTEXTO DEL TORNEO:
     {contexto_completo}
     
-    TU MISIÓN:
-    Ser un organizador experto. No esperes instrucciones paso a paso.
-    Si el usuario dice "Organiza el torneo", "Haz los cuadros", "Programa los partidos":
-    1. Mira la lista de JUGADORES INSCRITOS en tu contexto.
-    2. Usa tu inteligencia para crear los emparejamientos (Round Robin, Eliminación, lo que veas mejor según la cantidad).
-    3. Asigna horarios lógicos (ej: cada 30 mins) y canchas (1 y 2).
-    4. Genera la acción "guardar_organizacion_ia" con la lista de partidos.
+    TU MISIÓN: Entender la intención y extraer datos con precisión.
+    
+    -------------------------------------------------
+    REGLAS DE ORO PARA NOMBRES (INSCRIPCIÓN):
+    -------------------------------------------------
+    1. Si el usuario dice "Inscribir a [Nombre]", el nombre es [Nombre].
+       Ej: "Inscribe a Marielena" -> nombre: "Marielena"
+       Ej: "Anota a Jhohan" -> nombre: "Jhohan"
+    
+    2. Si el usuario dice "Yo juego", "Me inscribo", "Quiero entrar":
+       El nombre es "PERFIL_WHATSAPP" (Usa esta palabra clave exacta).
 
+    3. Si el usuario dice "Quiero inscribir" pero NO dice el nombre:
+       Responde con una pregunta amable.
+       JSON: {{ "accion": "conversacion", "respuesta_ia": "¿A quién deseas inscribir? Dame el nombre por favor." }}
+
+    -------------------------------------------------
     ESTRUCTURA DE RESPUESTA JSON (SIEMPRE):
+    -------------------------------------------------
     {{
-        "accion": "nombre_accion",
+        "accion": "nombre_accion", 
         "datos": {{ ... }},
-        "respuesta_ia": "Texto amable explicando qué hiciste"
+        "respuesta_ia": "..."
     }}
 
-    ACCIONES POSIBLES:
-    
-    1. ORGANIZAR TORNEO (AUTÓNOMO):
-       - JSON: 
-         {{
-           "accion": "guardar_organizacion_ia",
-           "datos": {{
-             "partidos": [
-                {{ "j1_nombre": "Juan", "j2_nombre": "Pedro", "hora": "3:00 PM", "cancha": "1" }},
-                {{ "j1_nombre": "Ana", "j2_nombre": "Maria", "hora": "3:30 PM", "cancha": "1" }}
-                ... (Todos los partidos necesarios)
-             ]
-           }},
-           "respuesta_ia": "¡Listo! He analizado los inscritos y he creado el fixture perfecto. Revisa la programación."
-         }}
+    LISTA DE ACCIONES VÁLIDAS:
+    1. "inscripcion" -> datos: {{ "nombre": "..." }}
+    2. "consultar_inscritos" -> (Si preguntan cuántos hay, quiénes van, estado).
+    3. "consultar_partido" -> (Si preguntan hora, rival, programación).
+    4. "reportar_victoria" -> datos: {{ "sets_ganador": 3, "sets_perdedor": 0, "nombre_ganador": "..." }}
+    5. "admin_iniciar" -> (Si dicen "Organizar torneo").
+    6. "conversacion" -> (Saludos, dudas, preguntas generales).
 
-    2. INSCRIPCIÓN:
-       - "Inscribir a [Nombre]".
-       - JSON: {{ "accion": "inscripcion", "datos": {{ "nombre": "Nombre Detectado" }} }}
-
-    3. REPORTAR VICTORIA:
-       - "Gané 3-0", "Ganó Miguel".
-       - JSON: {{ "accion": "reportar_victoria", "datos": {{ "sets_ganador": 3, "sets_perdedor": 0, "nombre_ganador": "Nombre Detectado (opcional)" }} }}
-
-    4. CONSULTAS:
-       - "¿Contra quién juego?", "¿Cuántos hay?".
-       - Acciones: "consultar_partido", "consultar_inscritos".
-
-    5. CHARLA:
-       - JSON: {{ "accion": "conversacion", "respuesta_ia": "..." }}
     """
 
     try:
@@ -67,9 +59,9 @@ def analizar_mensaje_ia(texto_usuario: str, contexto_completo: str):
                 {"role": "system", "content": prompt}, 
                 {"role": "user", "content": texto_usuario}
             ],
-            temperature=0.3, 
+            temperature=0.2, # Temperatura baja para ser muy preciso con los nombres
             response_format={ "type": "json_object" }
         )
         return json.loads(response.choices[0].message.content)
     except:
-        return {"accion": "conversacion", "respuesta_ia": "Error de proceso. 🤖"}
+        return {"accion": "conversacion", "respuesta_ia": "Dame un momento, estoy procesando. 🎾"}

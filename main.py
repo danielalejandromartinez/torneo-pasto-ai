@@ -8,7 +8,6 @@ from sqlalchemy.orm import Session
 from database import SessionLocal, engine
 import models
 from ai_agent import analizar_mensaje_ia
-# Importamos TODO para evitar errores de "nombre no encontrado"
 from logic import (
     inscribir_jugador, generar_partidos_automaticos, consultar_proximo_partido, 
     registrar_victoria, obtener_estado_torneo, obtener_contexto_completo,
@@ -31,11 +30,18 @@ def enviar_whatsapp(numero, texto):
         phone_id = os.getenv("WHATSAPP_PHONE_ID")
         url = f"https://graph.facebook.com/v17.0/{phone_id}/messages"
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-        if len(texto) > 40:
-            texto += "\n\n━━━━━━━━━━━━━━━━\n🚀 *Pasto.AI*"
-        data = {"messaging_product": "whatsapp", "to": numero, "type": "text", "text": {"body": texto}}
+        
+        # Firma solo si es texto largo
+        if len(texto) > 50:
+            texto_final = f"{texto}\n\n━━━━━━━━━━━━━━━━\n🚀 *Desarrollado por Pasto.AI*"
+        else:
+            texto_final = texto
+            
+        data = {"messaging_product": "whatsapp", "to": numero, "type": "text", "text": {"body": texto_final}}
+        print(f"📤 Enviando a {numero}...")
         requests.post(url, headers=headers, json=data)
-    except: pass
+    except Exception as e:
+        print(f"❌ Error WhatsApp: {e}")
 
 @app.get("/")
 def dashboard(request: Request, db: Session = Depends(get_db)):
@@ -76,21 +82,35 @@ async def recibir(request: Request, db: Session = Depends(get_db)):
                 contexto = obtener_contexto_completo(db)
                 analisis = analizar_mensaje_ia(texto, contexto)
                 
-                accion = str(analisis.get("accion", "conversacion")).strip().lower()
+                # Limpiamos acción
+                accion_raw = analisis.get("accion", "conversacion")
+                accion = str(accion_raw).strip().lower()
                 datos = analisis.get("datos", {})
                 
-                print(f"🧠 ACCIÓN: {accion}")
+                print(f"🧠 ACCIÓN: {accion} | DATOS: {datos}")
                 
                 respuesta = ""
                 es_admin = str(numero) == str(os.getenv("ADMIN_PHONE"))
 
+                # --- RUTAS ---
                 if accion == "conversacion":
                     respuesta = analisis.get("respuesta_ia", "Hola")
 
                 elif accion == "inscripcion":
-                    nombre_real = datos.get("nombre", nombre_wa)
-                    if nombre_real == "Jugador": nombre_real = nombre_wa
-                    respuesta = inscribir_jugador(db, nombre_real, numero)
+                    nombre_detectado = datos.get("nombre")
+                    
+                    # LÓGICA DE NOMBRE PRECISA
+                    if nombre_detectado == "PERFIL_WHATSAPP":
+                        nombre_final = nombre_wa
+                    elif nombre_detectado:
+                        nombre_final = nombre_detectado
+                    else:
+                        # Si la IA mandó la acción pero sin nombre, preguntamos
+                        respuesta = "¿A quién deseas inscribir? Por favor escribe el nombre."
+                        nombre_final = None
+
+                    if nombre_final:
+                        respuesta = inscribir_jugador(db, nombre_final, numero)
                 
                 elif accion == "consultar_inscritos":
                     respuesta = obtener_estado_torneo(db)
@@ -99,13 +119,14 @@ async def recibir(request: Request, db: Session = Depends(get_db)):
                     respuesta = consultar_proximo_partido(db, numero)
                 
                 elif accion == "reportar_victoria":
-                    n_ganador = datos.get("nombre_ganador", "")
-                    respuesta = registrar_victoria(db, numero, n_ganador, nombre_wa, datos.get("sets_ganador", 3), datos.get("sets_perdedor", 0))
+                    nombre_ganador = datos.get("nombre_ganador", "")
+                    respuesta = registrar_victoria(db, numero, nombre_ganador, nombre_wa, datos.get("sets_ganador", 3), datos.get("sets_perdedor", 0))
 
+                # --- ADMIN ---
                 elif accion == "guardar_config":
                     if es_admin:
                         guardar_configuracion_ia(db, datos.get("clave"), datos.get("valor"))
-                        respuesta = analisis.get("respuesta_ia", "Configurado.")
+                        respuesta = analisis.get("respuesta_ia", "Guardado.")
                     else: respuesta = "❌ Solo Admin."
 
                 elif accion == "guardar_fixture_ia":
@@ -115,22 +136,23 @@ async def recibir(request: Request, db: Session = Depends(get_db)):
                     else: respuesta = "❌ Solo Admin."
 
                 elif accion == "admin_iniciar":
-                    # Si la IA manda un mensaje (ej: preguntar hora), lo enviamos
-                    if analisis.get("respuesta_ia"):
-                        respuesta = analisis.get("respuesta_ia")
-                    else:
-                        # Si no, asumimos modo manual
-                        respuesta = generar_partidos_automaticos(db)
+                    if es_admin:
+                        # Si la IA tiene una respuesta (ej: preguntar datos), la enviamos
+                        if analisis.get("respuesta_ia"):
+                            respuesta = analisis.get("respuesta_ia")
+                        else:
+                            # Si no, asumimos que está pidiendo instrucciones
+                            respuesta = "Jefe, para organizar necesito: Canchas, Duración y Hora inicio."
+                    else: respuesta = "❌ Solo Admin."
 
-                # Si después de todo esto no hay respuesta generada por Python,
-                # usamos la que generó la IA por defecto
-                if not respuesta:
-                    respuesta = analisis.get("respuesta_ia", "Procesado.")
-
-                enviar_whatsapp(numero, respuesta)
+                # --- ENVIAR ---
+                if respuesta:
+                    enviar_whatsapp(numero, respuesta)
+                else:
+                    print("⚠️ Alerta: Respuesta vacía generada.")
 
     except Exception as e:
-        print(f"🔥 Error: {e}")
+        print(f"🔥 Error Servidor: {e}")
         traceback.print_exc()
         
     return {"status": "ok"}
