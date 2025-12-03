@@ -9,10 +9,9 @@ from database import SessionLocal, engine
 import models
 from ai_agent import analizar_mensaje_ia
 from logic import (
-    inscribir_jugador, generar_partidos_automaticos, consultar_proximo_partido, 
-    registrar_victoria, obtener_estado_torneo, obtener_contexto_completo,
-    guardar_configuracion_ia, guardar_fixture_ia, 
-    actualizar_configuracion, enviar_difusion_masiva, procesar_organizacion_torneo
+    inscribir_jugador, consultar_proximo_partido, registrar_victoria, 
+    obtener_estado_torneo, obtener_contexto_completo,
+    guardar_organizacion_ia # Nueva función potente
 )
 
 models.Base.metadata.create_all(bind=engine)
@@ -31,7 +30,6 @@ def enviar_whatsapp(numero, texto):
         url = f"https://graph.facebook.com/v17.0/{phone_id}/messages"
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         
-        # Firma profesional
         if len(texto) > 40:
             texto_final = f"{texto}\n\n━━━━━━━━━━━━━━━━\n🚀 *Desarrollado por Pasto.AI*\nSoluciones de IA para Profesionales"
         else:
@@ -45,7 +43,6 @@ def enviar_whatsapp(numero, texto):
 @app.get("/")
 def dashboard(request: Request, db: Session = Depends(get_db)):
     jugadores = db.query(models.Jugador).order_by(models.Jugador.puntos.desc()).all()
-    partidos = db.query(models.Partido).all()
     return templates.TemplateResponse("ranking.html", {"request": request, "jugadores": jugadores})
 
 @app.get("/programacion")
@@ -79,7 +76,7 @@ async def recibir(request: Request, db: Session = Depends(get_db)):
 
                 print(f"📩 {nombre_wa}: {texto}")
                 
-                # 1. LEER MEMORIA TOTAL
+                # 1. CONTEXTO COMPLETO (La IA ve todo)
                 contexto = obtener_contexto_completo(db)
                 
                 # 2. CEREBRO AUTÓNOMO
@@ -87,7 +84,7 @@ async def recibir(request: Request, db: Session = Depends(get_db)):
                 accion = analisis.get("accion")
                 datos = analisis.get("datos", {})
                 
-                print(f"🧠 ACCIÓN IA: {accion} | Datos: {datos}")
+                print(f"🧠 ACCIÓN IA: {accion}")
                 
                 respuesta = ""
                 es_admin = str(numero) == str(os.getenv("ADMIN_PHONE"))
@@ -96,31 +93,18 @@ async def recibir(request: Request, db: Session = Depends(get_db)):
                 if accion == "conversacion":
                     respuesta = analisis.get("respuesta_ia", "Hola")
 
-                elif accion == "guardar_config":
-                    if es_admin:
-                        respuesta = guardar_configuracion_ia(db, datos.get("clave"), datos.get("valor"))
-                    else:
-                        respuesta = "❌ Solo el admin configura."
-
-                elif accion == "guardar_fixture_ia":
-                    if es_admin:
-                        respuesta = guardar_fixture_ia(db, datos.get("partidos", []))
-                    else:
-                        respuesta = "❌ Solo el admin organiza."
-
                 elif accion == "inscripcion":
-                    # CORRECCIÓN DE PRIORIDAD DE NOMBRES
-                    nombre_ia = datos.get("nombre")
-                    
-                    if nombre_ia and str(nombre_ia).lower() != "none" and str(nombre_ia).strip() != "":
-                        # Si la IA detectó un nombre (ej: Marielena), usamos ese
-                        nombre_final = nombre_ia
-                    else:
-                        # Solo si la IA no detectó nada, usamos el del perfil de WhatsApp
-                        nombre_final = nombre_wa
-                        
-                    respuesta = inscribir_jugador(db, nombre_final, numero)
+                    nombre_real = datos.get("nombre", nombre_wa)
+                    if not nombre_real or nombre_real == "Jugador": nombre_real = nombre_wa
+                    respuesta = inscribir_jugador(db, nombre_real, numero)
                 
+                elif accion == "guardar_organizacion_ia":
+                    if es_admin:
+                        # La IA ya hizo el trabajo sucio, aquí solo guardamos
+                        respuesta = guardar_organizacion_ia(db, datos.get("partidos", []))
+                    else:
+                        respuesta = "❌ Solo el admin puede organizar."
+
                 elif accion == "consultar_inscritos":
                     respuesta = obtener_estado_torneo(db)
 
@@ -130,14 +114,6 @@ async def recibir(request: Request, db: Session = Depends(get_db)):
                 elif accion == "reportar_victoria":
                     nombre_ganador = datos.get("nombre_ganador", "")
                     respuesta = registrar_victoria(db, numero, nombre_ganador, nombre_wa, datos.get("sets_ganador", 3), datos.get("sets_perdedor", 0))
-
-                elif accion == "admin_iniciar":
-                    # Si la IA pide iniciar, revisamos si tiene datos o pregunta
-                    respuesta_ia = analisis.get("respuesta_ia")
-                    if respuesta_ia:
-                        respuesta = respuesta_ia
-                    else:
-                        respuesta = "Esperando comando..."
 
                 if respuesta:
                     enviar_whatsapp(numero, respuesta)
