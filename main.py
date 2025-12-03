@@ -8,10 +8,12 @@ from sqlalchemy.orm import Session
 from database import SessionLocal, engine
 import models
 from ai_agent import analizar_mensaje_ia
+# Importamos TODAS las herramientas necesarias
 from logic import (
-    inscribir_jugador, consultar_proximo_partido, registrar_victoria, 
-    obtener_estado_torneo, obtener_contexto_completo,
-    guardar_organizacion_ia # Nueva función potente
+    inscribir_jugador, generar_partidos_automaticos, consultar_proximo_partido, 
+    registrar_victoria, obtener_estado_torneo, obtener_contexto_completo,
+    guardar_organizacion_ia, guardar_configuracion_ia,
+    actualizar_configuracion, enviar_difusion_masiva, procesar_organizacion_torneo
 )
 
 models.Base.metadata.create_all(bind=engine)
@@ -25,25 +27,40 @@ def get_db():
 
 def enviar_whatsapp(numero, texto):
     try:
+        print(f"🚀 INTENTANDO ENVIAR A {numero}...")
         token = os.getenv("WHATSAPP_TOKEN")
         phone_id = os.getenv("WHATSAPP_PHONE_ID")
+        
+        if not token or not phone_id:
+            print("❌ ERROR: Faltan credenciales en Render.")
+            return
+
         url = f"https://graph.facebook.com/v17.0/{phone_id}/messages"
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         
+        # Firma profesional solo en mensajes largos
         if len(texto) > 40:
             texto_final = f"{texto}\n\n━━━━━━━━━━━━━━━━\n🚀 *Desarrollado por Pasto.AI*\nSoluciones de IA para Profesionales"
         else:
             texto_final = texto
             
         data = {"messaging_product": "whatsapp", "to": numero, "type": "text", "text": {"body": texto_final}}
-        requests.post(url, headers=headers, json=data)
+        
+        response = requests.post(url, headers=headers, json=data)
+        
+        if response.status_code == 200:
+            print("✅ MENSAJE ENTREGADO A META.")
+        else:
+            print(f"❌ ERROR META ({response.status_code}): {response.text}")
+            
     except Exception as e:
-        print(f"❌ Error WhatsApp: {e}")
+        print(f"❌ Error en función enviar_whatsapp: {e}")
 
 @app.get("/")
 def dashboard(request: Request, db: Session = Depends(get_db)):
     jugadores = db.query(models.Jugador).order_by(models.Jugador.puntos.desc()).all()
-    return templates.TemplateResponse("ranking.html", {"request": request, "jugadores": jugadores})
+    partidos = db.query(models.Partido).all()
+    return templates.TemplateResponse("ranking.html", {"request": request, "jugadores": jugadores, "partidos": partidos})
 
 @app.get("/programacion")
 def ver_programacion(request: Request, db: Session = Depends(get_db)):
@@ -63,63 +80,3 @@ async def recibir(request: Request, db: Session = Depends(get_db)):
         entry = data.get("entry", [])[0]
         changes = entry.get("changes", [])[0]
         value = changes.get("value", {})
-        
-        if "messages" in value:
-            msg = value["messages"][0]
-            if msg["type"] == "text":
-                texto = msg["text"]["body"]
-                numero = msg["from"]
-                
-                nombre_wa = "Jugador"
-                if "contacts" in value:
-                    nombre_wa = value["contacts"][0]["profile"]["name"]
-
-                print(f"📩 {nombre_wa}: {texto}")
-                
-                # 1. CONTEXTO COMPLETO (La IA ve todo)
-                contexto = obtener_contexto_completo(db)
-                
-                # 2. CEREBRO AUTÓNOMO
-                analisis = analizar_mensaje_ia(texto, contexto)
-                accion = analisis.get("accion")
-                datos = analisis.get("datos", {})
-                
-                print(f"🧠 ACCIÓN IA: {accion}")
-                
-                respuesta = ""
-                es_admin = str(numero) == str(os.getenv("ADMIN_PHONE"))
-
-                # --- EJECUCIÓN ---
-                if accion == "conversacion":
-                    respuesta = analisis.get("respuesta_ia", "Hola")
-
-                elif accion == "inscripcion":
-                    nombre_real = datos.get("nombre", nombre_wa)
-                    if not nombre_real or nombre_real == "Jugador": nombre_real = nombre_wa
-                    respuesta = inscribir_jugador(db, nombre_real, numero)
-                
-                elif accion == "guardar_organizacion_ia":
-                    if es_admin:
-                        # La IA ya hizo el trabajo sucio, aquí solo guardamos
-                        respuesta = guardar_organizacion_ia(db, datos.get("partidos", []))
-                    else:
-                        respuesta = "❌ Solo el admin puede organizar."
-
-                elif accion == "consultar_inscritos":
-                    respuesta = obtener_estado_torneo(db)
-
-                elif accion == "consultar_partido":
-                    respuesta = consultar_proximo_partido(db, numero)
-                
-                elif accion == "reportar_victoria":
-                    nombre_ganador = datos.get("nombre_ganador", "")
-                    respuesta = registrar_victoria(db, numero, nombre_ganador, nombre_wa, datos.get("sets_ganador", 3), datos.get("sets_perdedor", 0))
-
-                if respuesta:
-                    enviar_whatsapp(numero, respuesta)
-
-    except Exception as e:
-        print(f"🔥 Error: {e}")
-        traceback.print_exc()
-        
-    return {"status": "ok"}
