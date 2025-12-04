@@ -45,8 +45,8 @@ def inscribir_jugador(db: Session, nombre: str, celular: str):
     db.add(Jugador(nombre=nombre, celular=celular, puntos=100))
     db.commit()
     
-    # Generamos noticia automática de bienvenida
-    guardar_noticia(db, "¡NUEVO RETADOR!", f"{nombre} se une al circuito con 100 puntos. ¡Tiemblan los favoritos!", "anuncio")
+    # Noticia automática
+    guardar_noticia(db, "¡NUEVO RETADOR!", f"{nombre} se une al circuito con 100 puntos.", "anuncio")
     
     return f"✅ Inscrito: **{nombre}**."
 
@@ -67,6 +67,10 @@ def guardar_fixture_ia(db: Session, lista_partidos: list):
     db.commit()
     guardar_noticia(db, "¡PROGRAMACIÓN LISTA!", f"Se han generado {creados} nuevos partidos. Revisa tu horario.", "anuncio")
     return f"✅ Fixture creado ({creados} partidos)."
+
+# ESTA ES LA FUNCIÓN QUE FALTABA (EL ALIAS)
+def guardar_organizacion_ia(db: Session, lista_partidos: list):
+    return guardar_fixture_ia(db, lista_partidos)
 
 def ejecutar_victoria_ia(db: Session, nombre_ganador: str, nombre_perdedor: str, puntos_ganados: int, puntos_perdidos: int, marcador: str, titulo_noticia: str, cuerpo_noticia: str):
     """
@@ -112,13 +116,11 @@ def ejecutar_victoria_ia(db: Session, nombre_ganador: str, nombre_perdedor: str,
 # --- CONSULTAS ---
 def obtener_estado_torneo(db: Session):
     total = db.query(Jugador).count()
-    # Mostramos la última noticia
     ultima = db.query(Noticia).order_by(Noticia.id.desc()).first()
     news = f"📰 *ÚLTIMA HORA:* {ultima.titulo}" if ultima else ""
     return f"📊 *Estado*\n👥 Inscritos: {total}\n{news}"
 
 def consultar_proximo_partido(db: Session, celular: str):
-    # (Misma lógica de búsqueda familiar)
     mis = db.query(Jugador).filter(Jugador.celular == celular).all()
     if not mis: return "No tienes inscritos."
     ids = [p.id for p in mis]
@@ -132,7 +134,6 @@ def consultar_proximo_partido(db: Session, celular: str):
     return resp
 
 def registrar_victoria(db: Session, celular: str, nombre_ganador_detectado: str, nombre_perfil_wa: str, s1: int, s2: int):
-    # Esta función ahora es solo un wrapper para la IA, idealmente no se usa directamente
     return "Usa la IA para reportar."
 
 # Compatibilidad

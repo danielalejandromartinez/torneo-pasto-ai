@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from database import SessionLocal, engine
 import models
 from ai_agent import analizar_mensaje_ia
+# Importamos la función que faltaba
 from logic import (
     inscribir_jugador, consultar_proximo_partido, 
     ejecutar_victoria_ia, obtener_estado_torneo, obtener_contexto_completo,
@@ -43,8 +44,11 @@ def enviar_whatsapp(numero, texto):
 @app.get("/")
 def dashboard(request: Request, db: Session = Depends(get_db)):
     jugadores = db.query(models.Jugador).order_by(models.Jugador.puntos.desc()).all()
-    # Le pasamos las noticias a la web (aunque aun no las mostramos visualmente, los datos ya viajan)
-    noticias = db.query(models.Noticia).order_by(models.Noticia.fecha.desc()).limit(5).all()
+    # Enviamos noticias aunque aún no se muestren
+    noticias = []
+    try:
+        noticias = db.query(models.Noticia).order_by(models.Noticia.fecha.desc()).limit(5).all()
+    except: pass
     return templates.TemplateResponse("ranking.html", {"request": request, "jugadores": jugadores, "noticias": noticias})
 
 @app.get("/programacion")
@@ -98,7 +102,6 @@ async def recibir(request: Request, db: Session = Depends(get_db)):
                     respuesta = inscribir_jugador(db, nombre_real, numero)
                 
                 elif accion == "ejecutar_victoria_ia":
-                    # AQUÍ ESTÁ LA MAGIA DEL PERIODISTA
                     res_db = ejecutar_victoria_ia(
                         db, 
                         datos.get("nombre_ganador"), 
@@ -106,8 +109,8 @@ async def recibir(request: Request, db: Session = Depends(get_db)):
                         datos.get("puntos_ganados"), 
                         datos.get("puntos_perdidos"), 
                         datos.get("marcador", "3-0"),
-                        datos.get("titulo_noticia", "RESULTADO"), # Nuevo: Titular
-                        datos.get("cuerpo_noticia", "Partido finalizado.") # Nuevo: Cuerpo
+                        datos.get("titulo_noticia", "RESULTADO"),
+                        datos.get("cuerpo_noticia", "Partido finalizado.")
                     )
                     if res_db == "OK":
                         respuesta = respuesta_ia
@@ -128,7 +131,6 @@ async def recibir(request: Request, db: Session = Depends(get_db)):
                 elif accion == "admin_iniciar":
                     respuesta = respuesta_ia if respuesta_ia else "Comando recibido."
 
-                # Enviar
                 if not respuesta: respuesta = respuesta_ia
                 if not respuesta: respuesta = "Procesando..."
                 
