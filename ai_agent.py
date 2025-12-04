@@ -9,38 +9,49 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 def analizar_mensaje_ia(texto_usuario: str, contexto_completo: str):
     prompt = f"""
     Eres ALEJANDRO, el Gerente Deportivo de Pasto.AI.
+    
     CONTEXTO: {contexto_completo}
     
-    INSTRUCCIÓN: Responde SIEMPRE JSON.
+    TU MISIÓN: Entender la intención del usuario.
     
-    INTENCIONES:
-    1. INSCRIPCIÓN:
-       - "Inscribir a [Nombre]", "Quiero jugar".
-       - JSON: {{ "accion": "inscripcion", "datos": {{ "nombre": "Nombre Detectado" }} }}
-       *Si dice 'Quiero jugar' sin nombre, nombre = PERFIL_WHATSAPP*
+    🚨 REGLA DE PRIORIDAD:
+    Si el usuario hace una PREGUNTA ("¿Cuántos hay?", "Dame la lista", "¿Quiénes están?", "¿Qué horas?", "Info"),
+    TU ACCIÓN DEBE SER 'consultar_inscritos' o 'conversacion'.
+    NO USES 'admin_wizard' PARA PREGUNTAS.
 
-    2. WIZARD ORGANIZADOR (PRIORIDAD ALTA):
-       - Si el admin dice: "Organizar torneo", "Hacer cuadros", "Inicia torneo".
-       - O si responde con datos cortos: "2", "30", "15:00", "Generar", "Cancelar".
+    INTENCIONES:
+    
+    1. CONSULTAR INSCRITOS (PRIORIDAD ALTA):
+       - "Dame los nombres", "¿Quiénes están?", "¿Cuántos inscritos hay?", "Lista de jugadores".
+       - JSON: {{ "accion": "consultar_inscritos" }}
+
+    2. CONSULTAR PARTIDO:
+       - "¿A qué hora juego?", "Mis partidos".
+       - JSON: {{ "accion": "consultar_partido" }}
+
+    3. INSCRIPCIÓN:
+       - "Inscribir a X", "Quiero jugar".
+       - JSON: {{ "accion": "inscripcion", "datos": {{ "nombre": "..." }} }}
+
+    4. REPORTAR VICTORIA:
+       - "Gané 3-0".
+       - JSON: {{ "accion": "reportar_victoria", "datos": {{ ... }} }}
+
+    5. WIZARD ORGANIZADOR (SOLO DATOS TÉCNICOS):
+       - ÚSALO SOLO SI el usuario responde con números o datos cortos: "2", "30", "15:00", "Generar", "Cancelar".
+       - O si dice explícitamente "Organizar torneo".
        - JSON: {{ "accion": "admin_wizard", "datos": {{ "mensaje": "{texto_usuario}" }} }}
 
-    3. REPORTAR VICTORIA:
-       - "Gané 3-0", "Ganó Miguel".
-       - JSON: {{ "accion": "ejecutar_victoria_ia", "datos": {{ ...datos del partido... }} }}
-
-    4. CONSULTAS:
-       - "¿Cuántos inscritos?", "Partidos". -> "consultar_inscritos", "consultar_partido".
-
-    5. CHARLA / LINKS:
+    6. CHARLA / VENTAS:
+       - Saludos, dudas generales, link de la web.
        - JSON: {{ "accion": "conversacion", "respuesta_ia": "..." }}
-       - Web obligatoria en preguntas de "ver": https://torneo-pasto-ai.onrender.com/
     """
 
     try:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "system", "content": prompt}, {"role": "user", "content": texto_usuario}],
-            temperature=0.2,
+            temperature=0.2, 
             response_format={ "type": "json_object" }
         )
         return json.loads(response.choices[0].message.content)
