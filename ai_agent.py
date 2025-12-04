@@ -9,40 +9,40 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 def analizar_mensaje_ia(texto_usuario: str, contexto_completo: str):
     prompt = f"""
     Eres ALEJANDRO, el Gerente Deportivo de Pasto.AI.
-    
     CONTEXTO: {contexto_completo}
     
-    TU MISIÓN: Ser humano, inteligente y autónomo.
+    INSTRUCCIÓN: Responde SIEMPRE JSON.
     
-    INSTRUCCIONES:
-    1. Si el usuario pide una acción técnica (Inscribir, Reportar, Consultar datos), usa el JSON de acción.
-    2. Si el usuario HABLA (Saluda, bromea, pregunta cosas generales, se queja), usa la acción "conversacion" y respóndele como una persona.
-    
-    ACCIONES TÉCNICAS:
-    - "inscripcion" (Datos: nombre)
-    - "reportar_victoria" (Datos: ganadores, puntos)
-    - "consultar_inscritos"
-    - "consultar_partido"
-    - "admin_iniciar" (Organizar)
-    
-    FORMATO JSON:
-    {{
-        "accion": "nombre_de_la_accion",
-        "datos": {{ ... }},
-        "respuesta_ia": "Texto conversacional para el usuario"
-    }}
+    INTENCIONES:
+    1. INSCRIPCIÓN:
+       - "Inscribir a [Nombre]", "Quiero jugar".
+       - JSON: {{ "accion": "inscripcion", "datos": {{ "nombre": "Nombre Detectado" }} }}
+       *Si dice 'Quiero jugar' sin nombre, nombre = PERFIL_WHATSAPP*
+
+    2. WIZARD ORGANIZADOR (PRIORIDAD ALTA):
+       - Si el admin dice: "Organizar torneo", "Hacer cuadros", "Inicia torneo".
+       - O si responde con datos cortos: "2", "30", "15:00", "Generar", "Cancelar".
+       - JSON: {{ "accion": "admin_wizard", "datos": {{ "mensaje": "{texto_usuario}" }} }}
+
+    3. REPORTAR VICTORIA:
+       - "Gané 3-0", "Ganó Miguel".
+       - JSON: {{ "accion": "ejecutar_victoria_ia", "datos": {{ ...datos del partido... }} }}
+
+    4. CONSULTAS:
+       - "¿Cuántos inscritos?", "Partidos". -> "consultar_inscritos", "consultar_partido".
+
+    5. CHARLA / LINKS:
+       - JSON: {{ "accion": "conversacion", "respuesta_ia": "..." }}
+       - Web obligatoria en preguntas de "ver": https://torneo-pasto-ai.onrender.com/
     """
 
     try:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": prompt}, 
-                {"role": "user", "content": texto_usuario}
-            ],
-            temperature=0.4, # Temperatura media para que sea creativo hablando
+            messages=[{"role": "system", "content": prompt}, {"role": "user", "content": texto_usuario}],
+            temperature=0.2,
             response_format={ "type": "json_object" }
         )
         return json.loads(response.choices[0].message.content)
     except:
-        return {"accion": "conversacion", "respuesta_ia": "Dame un momento, hubo una interferencia. 📡"}
+        return {"accion": "conversacion", "respuesta_ia": "Error."}
