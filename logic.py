@@ -6,12 +6,15 @@ import os
 import requests
 from datetime import datetime, timedelta
 
-# --- HERRAMIENTAS BASE ---
-def get_config(db: Session, key: str):
+# ==========================================
+# 🛠️ HERRAMIENTAS DE MEMORIA (CONFIGURACIÓN)
+# ==========================================
+
+def get_config_value(db: Session, key: str):
     item = db.query(Configuracion).filter(Configuracion.key == key).first()
     return item.value if item else None
 
-def set_config(db: Session, key: str, value: str):
+def set_config_value(db: Session, key: str, value: str):
     item = db.query(Configuracion).filter(Configuracion.key == key).first()
     if not item:
         item = Configuracion(key=key, value=value)
@@ -20,14 +23,20 @@ def set_config(db: Session, key: str, value: str):
         item.value = value
     db.commit()
 
+# --- ESTA ES LA FUNCIÓN QUE FALTABA (PARA LA IA) ---
+def guardar_configuracion_ia(db: Session, clave: str, valor: str):
+    set_config_value(db, clave, valor)
+    return f"📝 Configuración guardada: **{clave}** = **{valor}**."
+
+# --- ESTA ES PARA EL ADMIN MANUAL ---
 def actualizar_configuracion(db: Session, clave: str, valor: str):
-    set_config(db, clave, valor)
-    return f"🫡 Configurado: **{clave}** = **{valor}**."
+    set_config_value(db, clave, valor)
+    return f"🫡 Listo jefe. Configurado: **{clave}** = **{valor}**."
 
 def obtener_configuracion(db: Session):
     configs = db.query(Configuracion).all()
     texto = "\n".join([f"- {c.key}: {c.value}" for c in configs])
-    return texto if texto else "No hay reglas definidas."
+    return texto if texto else "No hay reglas definidas aún."
 
 def enviar_difusion_masiva(db: Session, mensaje: str):
     jugadores = db.query(Jugador.celular).distinct().all()
@@ -43,101 +52,105 @@ def enviar_difusion_masiva(db: Session, mensaje: str):
             requests.post(url, headers=headers, json=data)
             count += 1
         except: continue
-    return f"✅ Enviado a {count} números."
+    return f"✅ Enviado a {count} números únicos."
 
-# --- CONTEXTO PARA IA ---
+# ==========================================
+# 🧠 CONTEXTO Y NOTICIAS
+# ==========================================
+
 def obtener_contexto_completo(db: Session):
-    jugadores = db.query(Jugador).order_by(Jugador.puntos.desc()).all()
-    lista_jugadores = "\n".join([f"- {j.nombre} ({j.puntos} pts)" for j in jugadores])
+    jugadores = db.query(Jugador).all()
+    lista_jugadores = "\n".join([f"- {j.nombre} ({j.celular})" for j in jugadores])
     if not lista_jugadores: lista_jugadores = "Ninguno"
     configs = db.query(Configuracion).all()
     lista_config = "\n".join([f"- {c.key}: {c.value}" for c in configs])
-    return f"--- RANKING ---\n{lista_jugadores}\n--- REGLAS ---\n{lista_config}"
+    return f"--- DATA ---\nINSCRITOS:\n{lista_jugadores}\nREGLAS:\n{lista_config}\n------------"
 
-# --- NOTICIAS ---
 def guardar_noticia(db: Session, titulo: str, cuerpo: str, tipo: str="general"):
     try:
         nueva = Noticia(titulo=titulo, cuerpo=cuerpo, tipo=tipo)
         db.add(nueva)
         db.commit()
-    except: pass # Si falla la noticia, que no rompa el flujo
+    except: pass
 
-# --- WIZARD DE ORGANIZACIÓN (EL QUE ESTABA ROTO) ---
-def procesar_organizacion_torneo(db: Session, mensaje_usuario: str):
-    paso_actual = get_config(db, "wizard_paso")
-    
-    # Cancelar
-    if mensaje_usuario.lower() in ["cancelar", "salir", "abortar"]:
-        set_config(db, "wizard_paso", "")
-        return "🛑 Configuración cancelada."
+# ==========================================
+# 🧙‍♂️ WIZARD DE ORGANIZACIÓN
+# ==========================================
 
-    # Inicio
-    if not paso_actual or mensaje_usuario.lower() in ["organizar torneo", "iniciar wizard", "inicia torneo", "hacer cuadros"]:
-        set_config(db, "wizard_paso", "canchas")
-        return "👷‍♂️ ¡Listo Jefe! (Escribe 'Cancelar' para salir).\n\n1️⃣ **¿Cuántas canchas** tenemos disponibles? (Ej: 2)"
+def guardar_fixture_ia(db: Session, lista_partidos: list):
+    """La IA generó el cuadro, aquí lo guardamos."""
+    db.query(Partido).filter(Partido.estado == "pendiente").delete()
+    creados = 0
+    for p in lista_partidos:
+        j1 = db.query(Jugador).filter(func.lower(Jugador.nombre) == p['j1_nombre'].lower()).first()
+        j2 = db.query(Jugador).filter(func.lower(Jugador.nombre) == p['j2_nombre'].lower()).first()
+        if j1 and j2:
+            db.add(Partido(
+                jugador_1_id=j1.id, jugador_1_nombre=j1.nombre,
+                jugador_2_id=j2.id, jugador_2_nombre=j2.nombre,
+                cancha=str(p.get('cancha', '1')), hora=str(p.get('hora', 'Por definir')),
+                estado="pendiente"
+            ))
+            creados += 1
+    db.commit()
+    guardar_noticia(db, "¡PROGRAMACIÓN LISTA!", f"Se han generado {creados} nuevos partidos.", "anuncio")
+    return f"✅ **¡FIXTURE IA CREADO!**\n{creados} partidos listos. Revisa la web."
 
-    # Paso 1: Canchas
-    if paso_actual == "canchas":
-        if not mensaje_usuario.isdigit(): return "⚠️ Escribe solo el número (Ej: 2)."
-        set_config(db, "num_canchas", mensaje_usuario)
-        set_config(db, "wizard_paso", "duracion")
-        return f"✅ {mensaje_usuario} canchas.\n\n2️⃣ **¿Duración del partido** en minutos? (Ej: 30)"
+# ALIAS PARA QUE MAIN.PY NO FALLE
+def guardar_organizacion_ia(db: Session, lista_partidos: list):
+    return guardar_fixture_ia(db, lista_partidos)
 
-    # Paso 2: Duración
-    if paso_actual == "duracion":
-        if not mensaje_usuario.isdigit(): return "⚠️ Escribe solo minutos (Ej: 30)."
-        set_config(db, "duracion_partido", mensaje_usuario)
-        set_config(db, "wizard_paso", "hora")
-        return f"✅ {mensaje_usuario} mins.\n\n3️⃣ **¿Hora de inicio**? (Formato 24h, Ej: 15:00)"
-
-    # Paso 3: Hora
-    if paso_actual == "hora":
-        if ":" not in mensaje_usuario: return "⚠️ Usa formato hora (Ej: 15:00)."
-        set_config(db, "hora_inicio", mensaje_usuario)
-        set_config(db, "wizard_paso", "confirmar")
-        return f"📋 Resumen listo. Escribe **GENERAR** para confirmar."
-
-    # Paso 4: Confirmar
-    if paso_actual == "confirmar":
-        if "generar" in mensaje_usuario.lower():
-            set_config(db, "wizard_paso", "") 
-            return generar_partidos_automaticos(db)
-        return "Escribe GENERAR o 'Cancelar'."
-
-    return "No entendí. Escribe 'Organizar torneo' para reiniciar."
-
-# --- GENERACIÓN DE PARTIDOS ---
 def generar_partidos_automaticos(db: Session):
+    # Función legacy por seguridad
     jugadores = db.query(Jugador).all()
     if len(jugadores) < 2: return "❌ Faltan jugadores."
-    
     db.query(Partido).filter(Partido.estado == "pendiente").delete()
     random.shuffle(jugadores)
-    
-    try:
-        num_canchas = int(get_config(db, "num_canchas") or 1)
-        duracion = int(get_config(db, "duracion_partido") or 30)
-        hora_str = get_config(db, "hora_inicio") or "12:00"
-        hora_base = datetime.strptime(hora_str, "%H:%M")
-        ahora = datetime.now()
-        hora_base = hora_base.replace(year=ahora.year, month=ahora.month, day=ahora.day)
-    except: return "⚠️ Error config."
-
-    creados = 0; cancha_actual = 1; slot_tiempo = 0
+    creados = 0
     for i in range(len(jugadores) // 2):
         p1, p2 = jugadores[i*2], jugadores[i*2+1]
-        mins = slot_tiempo * duracion
-        hora = (hora_base + timedelta(minutes=mins)).strftime("%I:%M %p")
-        db.add(Partido(jugador_1_id=p1.id, jugador_1_nombre=p1.nombre, jugador_2_id=p2.id, jugador_2_nombre=p2.nombre, cancha=str(cancha_actual), hora=hora, estado="pendiente"))
+        db.add(Partido(jugador_1_id=p1.id, jugador_1_nombre=p1.nombre, jugador_2_id=p2.id, jugador_2_nombre=p2.nombre, cancha="1", hora="Por definir", estado="pendiente"))
         creados += 1
-        if cancha_actual < num_canchas: cancha_actual += 1
-        else: cancha_actual = 1; slot_tiempo += 1
-    
     db.commit()
-    guardar_noticia(db, "¡PROGRAMACIÓN LISTA!", f"Se han generado {creados} partidos. Revisa la web.", "anuncio")
-    return f"✅ **¡FIXTURE LISTO!**\n{creados} partidos creados. Revisa la web: https://torneo-pasto-ai.onrender.com/programacion"
+    return f"✅ Fixture Manual: {creados} partidos."
 
-# --- INSCRIPCIÓN Y VICTORIA ---
+def procesar_organizacion_torneo(db: Session, mensaje: str):
+    paso_actual = get_config_value(db, "wizard_paso")
+    if mensaje.lower() in ["cancelar", "salir"]:
+        set_config_value(db, "wizard_paso", "")
+        return "🛑 Cancelado."
+    
+    if not paso_actual or "organizar" in mensaje.lower():
+        set_config_value(db, "wizard_paso", "canchas")
+        return "👷‍♂️ Listo Jefe. 1️⃣ ¿Cuántas canchas?"
+    
+    if paso_actual == "canchas":
+        set_config_value(db, "num_canchas", mensaje)
+        set_config_value(db, "wizard_paso", "duracion")
+        return "✅ 2️⃣ ¿Duración en minutos?"
+    
+    if paso_actual == "duracion":
+        set_config_value(db, "duracion_partido", mensaje)
+        set_config_value(db, "wizard_paso", "hora")
+        return "✅ 3️⃣ ¿Hora de inicio?"
+    
+    if paso_actual == "hora":
+        set_config_value(db, "hora_inicio", mensaje)
+        set_config_value(db, "wizard_paso", "confirmar")
+        return "📋 Escribe **GENERAR** para confirmar."
+    
+    if paso_actual == "confirmar":
+        if "generar" in mensaje.lower():
+            set_config_value(db, "wizard_paso", "")
+            return generar_partidos_automaticos(db)
+        return "Escribe GENERAR."
+    
+    return "Escribe 'Organizar torneo'."
+
+# ==========================================
+# 👥 LÓGICA DE JUGADORES Y RESULTADOS
+# ==========================================
+
 def inscribir_jugador(db: Session, nombre: str, celular: str):
     existente = db.query(Jugador).filter(Jugador.celular == celular, func.lower(Jugador.nombre) == nombre.lower()).first()
     if existente: return f"⚠️ **{existente.nombre}** ya está inscrito."
@@ -145,10 +158,8 @@ def inscribir_jugador(db: Session, nombre: str, celular: str):
     db.add(Jugador(nombre=nombre, celular=celular, puntos=100))
     db.commit()
     
-    total = db.query(Jugador).filter(Jugador.celular == celular).count()
     guardar_noticia(db, "¡NUEVO JUGADOR!", f"{nombre} se ha unido al circuito.", "anuncio")
-    
-    return f"✅ Inscrito: **{nombre}**. (Tienes {total} perfiles)."
+    return f"✅ Inscrito: **{nombre}**."
 
 def obtener_estado_torneo(db: Session):
     total = db.query(Jugador).count()
@@ -159,7 +170,7 @@ def consultar_proximo_partido(db: Session, celular: str):
     if not mis: return "No tienes inscritos."
     ids = [p.id for p in mis]
     parts = db.query(Partido).filter((Partido.jugador_1_id.in_(ids)) | (Partido.jugador_2_id.in_(ids)), Partido.estado == "pendiente").all()
-    if not parts: return "📅 No tienes partidos. Revisa: https://torneo-pasto-ai.onrender.com/programacion"
+    if not parts: return "📅 No tienes partidos."
     resp = "📅 **TUS PARTIDOS:**\n"
     for p in parts:
         mi = next((j for j in mis if j.id in [p.jugador_1_id, p.jugador_2_id]), None)
@@ -190,6 +201,5 @@ def ejecutar_victoria_ia(db: Session, nombre_ganador: str, nombre_perdedor: str,
     db.commit()
     return "OK"
 
-# Alias para evitar errores
-def guardar_organizacion_ia(db, lista): return "Usa el wizard."
+# Wrapper para main
 def registrar_victoria(db, c, ng, nw, s1, s2): return "Usa la IA."
