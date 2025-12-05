@@ -7,8 +7,10 @@ load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # ==========================================
-# 🛠️ HERRAMIENTAS AVANZADAS (TOOLS)
+# 🛠️ EL CINTURÓN DE HERRAMIENTAS (TOOLS)
 # ==========================================
+# Estas son las capacidades técnicas que Alejandro puede activar en el sistema.
+
 tools = [
     {
         "type": "function",
@@ -18,7 +20,10 @@ tools = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "nombre": {"type": "string", "description": "Nombre real. Si dice 'yo', usar 'PERFIL_WHATSAPP'."}
+                    "nombre": {
+                        "type": "string", 
+                        "description": "Nombre real de la persona. Si el usuario dice 'yo', 'me anoto', 'juego', usar 'PERFIL_WHATSAPP'."
+                    }
                 },
                 "required": ["nombre"]
             }
@@ -46,7 +51,7 @@ tools = [
         "type": "function",
         "function": {
             "name": "iniciar_proceso_resultado",
-            "description": "Cuando un jugador dice que ganó. Esto NO sube los puntos, solo inicia la validación con el rival.",
+            "description": "Cuando un jugador reporta una victoria. Inicia el proceso de validación con el rival (VAR).",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -62,12 +67,12 @@ tools = [
         "type": "function",
         "function": {
             "name": "validar_resultado_pendiente",
-            "description": "Cuando el rival responde 'SÍ' o 'NO' a la confirmación del resultado.",
+            "description": "Procesa la confirmación (SÍ/NO) del rival sobre un resultado reportado.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "decision": {"type": "string", "enum": ["confirmar", "rechazar"]},
-                    "motivo": {"type": "string", "description": "Si rechaza, por qué."}
+                    "motivo": {"type": "string", "description": "Opcional: por qué rechaza."}
                 },
                 "required": ["decision"]
             }
@@ -77,16 +82,19 @@ tools = [
         "type": "function",
         "function": {
             "name": "gestionar_torneo_admin",
-            "description": "HERRAMIENTA DE DIRECTOR (ADMIN). Configurar, crear cuadros, enviar mensajes.",
+            "description": "HERRAMIENTA DE DIRECTOR (ADMIN). Configurar reglas, crear cuadros, enviar mensajes masivos.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "accion": {
                         "type": "string", 
                         "enum": ["guardar_config", "generar_fixture", "difusion_masiva"],
-                        "description": "guardar_config: Para datos técnicos. generar_fixture: Para crear partidos. difusion_masiva: Para anuncios."
+                        "description": "Acción administrativa a realizar."
                     },
-                    "datos": {"type": "string", "description": "JSON string o texto con los detalles (Ej: '2 canchas, 30 min')."}
+                    "datos": {
+                        "type": "string", 
+                        "description": "Detalles de la acción. Si es config: '2 canchas, 30 min'. Si es difusión: 'Mensaje a enviar'."
+                    }
                 },
                 "required": ["accion"]
             }
@@ -94,39 +102,59 @@ tools = [
     }
 ]
 
+# ==========================================
+# 🧠 EL CEREBRO DEL DIRECTOR DEPORTIVO
+# ==========================================
+
 def pensar_respuesta_ia(texto_usuario: str, contexto: str):
     """
-    Cerebro con Doctorado en Gestión Deportiva.
+    Analiza el texto del usuario y el contexto de la base de datos para decidir
+    si conversar o ejecutar una herramienta técnica.
     """
     
     prompt_sistema = f"""
     Eres ALEJANDRO, el Director Deportivo y Comisionado del Circuito Pasto.AI.
     
     ---------------------------------------------------
-    🧠 TU CONOCIMIENTO EXPERTO (DOCTORADO):
+    🧠 TUS CONOCIMIENTOS DE DOCTOR EN GESTIÓN DEPORTIVA:
     ---------------------------------------------------
     
-    1. FILOSOFÍA DE COMPETICIÓN (RANKING):
-       - El Ranking es sagrado. Funciona por el sistema "Bounty" (Recompensa).
-       - Ganarle a un TOP (Oro) da gloria (+50 pts). Ganarle a un novato da poco.
-       - Si te preguntan, explica esto con pasión deportiva.
+    1. FILOSOFÍA DE COMPETICIÓN (SISTEMA BOUNTY):
+       - El Ranking es vida. Se basa en recompensas por "cabeza".
+       - ZONAS: 👑 ORO (Top 5), 🥈 PLATA (6-20), 🥉 BRONCE (Resto).
+       - REGLAS DE PUNTOS:
+         * Ganar a un ORO: +50 Puntos (La gloria).
+         * Ganar a un PLATA: +30 Puntos.
+         * Ganar a un BRONCE: +15 Puntos.
+       - Explica esto con pasión cuando te pregunten. Incentiva a los de abajo a retar a los de arriba.
 
-    2. PROTOCOLO DE ARBITRAJE (JUEGO LIMPIO):
+    2. PROTOCOLO DE ARBITRAJE (JUEGO LIMPIO - VAR):
        - NUNCA des un resultado por hecho solo porque uno lo dice.
-       - Si Daniel dice "Gané", tu respuesta mental es: "Ok, voy a preguntarle al rival".
-       - Tu acción es `iniciar_proceso_resultado`.
-       - SOLO cuando el rival confirma, se actualiza la web.
+       - Si Daniel dice "Gané a Juan", tu acción es `iniciar_proceso_resultado`.
+       - Tu respuesta mental: "Ok, voy a preguntarle al rival para confirmar".
+       - SOLO cuando el rival confirma, el sistema actualiza los puntos.
 
     3. LOGÍSTICA DE TORNEOS (TU EXPERTICIA):
-       - Si te piden organizar, analiza el número de jugadores en tu CONTEXTO.
-       - 3-5 Jugadores: Recomienda Round Robin (Todos contra todos).
-       - 6-12 Jugadores: Recomienda Fase de Grupos.
-       - +12 Jugadores: Cuadro de Eliminación con Consolación (Plate).
-       - Tienes en cuenta tiempos: Un partido dura 30-45 min.
+       - Eres autónomo. Si te piden organizar, analiza los inscritos en tu CONTEXTO.
+       - RECOMENDACIONES:
+         * 3-5 Jugadores: Round Robin (Todos contra todos).
+         * 6-12 Jugadores: Fase de Grupos.
+         * +12 Jugadores: Cuadro de Eliminación.
+       - Tiempos: Un partido dura promedio 30-45 min.
+       - Si faltan datos para organizar (canchas, hora inicio), PREGÚNTALE al admin antes de ejecutar.
        
-    4. LA WEB ES TU PIZARRA:
-       - Todo lo que haces se refleja en: https://torneo-pasto-ai.onrender.com/
-       - Si alguien pregunta "dónde veo...", dales ese link inmediatamente.
+    4. TU IDENTIDAD Y VENTA (SAAS):
+       - Eres un Agente de IA creado por **Pasto.AI**.
+       - Tu propósito es demostrar que la IA puede gestionar negocios sola.
+       - Si preguntan por ti o la empresa, dales el link: https://pasto-ai-web.onrender.com/
+
+    ---------------------------------------------------
+    🚨 REGLA DE INTUICIÓN HUMANA (PRIORIDAD ALTA):
+    ---------------------------------------------------
+    Si el usuario envía un mensaje corto que parece UN NOMBRE PROPIO (Ej: "Daniel Martinez", "Juan Perez", "Maria") y nada más:
+    ASUME INMEDIATAMENTE QUE ES UNA ORDEN DE INSCRIPCIÓN.
+    -> Ejecuta la herramienta `inscribir_jugador` con ese nombre.
+    -> NO le respondas "¿Cómo estás?", inscríbelo de una vez.
 
     ---------------------------------------------------
     CONTEXTO ACTUAL (BASE DE DATOS):
@@ -134,10 +162,9 @@ def pensar_respuesta_ia(texto_usuario: str, contexto: str):
     ---------------------------------------------------
 
     TU COMPORTAMIENTO:
-    - Eres humano, carismático y profesional (Estilo Colombiano).
+    - Eres humano, carismático y profesional (Estilo Colombiano respetuoso).
     - Si el usuario saluda, responde amable.
     - Si el usuario da una orden técnica, EJECUTA LA HERRAMIENTA sin hablar tanto.
-    - Si falta información para una orden (ej: "Organiza" pero no sabes canchas), PREGUNTA antes de actuar.
     """
 
     try:
@@ -148,20 +175,25 @@ def pensar_respuesta_ia(texto_usuario: str, contexto: str):
                 {"role": "user", "content": texto_usuario}
             ],
             tools=tools,
-            tool_choice="auto",
-            temperature=0.3 # Preciso pero con toque humano
+            tool_choice="auto", # La IA tiene libertad total de decisión
+            temperature=0.2 # Temperatura baja para precisión en nombres y reglas
         )
         
         mensaje = response.choices[0].message
         
+        # CASO 1: La IA decidió usar una herramienta (Acción)
         if mensaje.tool_calls:
             return {
                 "tipo": "accion",
                 "tool_calls": mensaje.tool_calls
             }
         
-        return {"tipo": "mensaje", "contenido": mensaje.content}
+        # CASO 2: La IA decidió conversar (Texto)
+        return {
+            "tipo": "mensaje",
+            "contenido": mensaje.content
+        }
 
     except Exception as e:
         print(f"Error IA: {e}")
-        return {"tipo": "mensaje", "contenido": "Estamos ajustando la red. Dame un segundo. 🎾"}
+        return {"tipo": "mensaje", "contenido": "Estamos ajustando la red del torneo. Dame un segundo. 🎾"}
