@@ -22,16 +22,13 @@ def obtener_contexto_completo(db: Session):
     """
     Entrega toda la información necesaria para que la IA tome decisiones expertas.
     """
-    # 1. Jugadores Ordenados (Para que la IA sepa quién es el #1)
     jugadores = db.query(Jugador).order_by(Jugador.puntos.desc()).all()
     lista_jugadores = "\n".join([f"- {j.nombre} ({j.puntos} pts)" for j in jugadores])
     if not lista_jugadores: lista_jugadores = "Ninguno"
     
-    # 2. Configuración Técnica
     configs = db.query(Configuracion).all()
     lista_config = "\n".join([f"- {c.key}: {c.value}" for c in configs])
     
-    # 3. Partidos Actuales (Para no programar sobre lo programado)
     partidos = db.query(Partido).filter(Partido.estado == "pendiente").all()
     lista_partidos = "\n".join([f"- {p.jugador_1_nombre} vs {p.jugador_2_nombre} ({p.hora})" for p in partidos])
     
@@ -60,12 +57,10 @@ def guardar_organizacion_experta(db: Session, lista_partidos: list):
     """
     Recibe el plan maestro de la IA y lo guarda en la BD.
     """
-    # Limpiamos lo pendiente anterior
     db.query(Partido).filter(Partido.estado == "pendiente").delete()
     
     creados = 0
     for p in lista_partidos:
-        # Buscamos jugadores (insensible a mayúsculas)
         j1 = db.query(Jugador).filter(func.lower(Jugador.nombre) == p['j1_nombre'].lower()).first()
         j2 = db.query(Jugador).filter(func.lower(Jugador.nombre) == p['j2_nombre'].lower()).first()
         
@@ -126,13 +121,11 @@ def ejecutar_victoria_ia(db: Session, nombre_ganador: str, nombre_perdedor: str,
     
     if not ganador or not perdedor: return "❌ Error: No encontré esos nombres. Revisa la ortografía."
 
-    # Lógica de puntos
     ganador.puntos += puntos_ganados
     perdedor.puntos = max(0, perdedor.puntos - puntos_perdidos)
     ganador.victorias += 1
     perdedor.derrotas += 1
     
-    # Cerrar partido
     partido = db.query(Partido).filter((Partido.estado == "pendiente"), (Partido.jugador_1_id.in_([ganador.id, perdedor.id])), (Partido.jugador_2_id.in_([ganador.id, perdedor.id]))).first()
     
     if partido:
@@ -140,14 +133,24 @@ def ejecutar_victoria_ia(db: Session, nombre_ganador: str, nombre_perdedor: str,
         partido.ganador_id = ganador.id
         partido.marcador = marcador
     else:
-        # Reto libre
         db.add(Partido(jugador_1_id=ganador.id, jugador_1_nombre=ganador.nombre, jugador_2_id=perdedor.id, jugador_2_nombre=perdedor.nombre, ganador_id=ganador.id, marcador=marcador, estado="finalizado", cancha="Reto", hora=datetime.now().strftime("%I:%M %p")))
 
     guardar_noticia(db, titulo_noticia, cuerpo_noticia, "partido")
     db.commit()
     return "OK"
 
-# Alias para main
+# --- FUNCIONES DE COMPATIBILIDAD (LAS QUE FALTABAN) ---
+def actualizar_configuracion(db: Session, clave: str, valor: str):
+    return guardar_configuracion_ia(db, clave, valor)
+
+def enviar_difusion_masiva(db: Session, mensaje: str):
+    # Lógica simplificada de difusión
+    jugadores = db.query(Jugador.celular).distinct().all()
+    return f"Simulación: Mensaje enviado a {len(jugadores)} personas."
+
+def procesar_organizacion_torneo(db: Session, mensaje: str):
+    return "⚠️ Usa el comando 'Organizar torneo' en lenguaje natural."
+
 def registrar_victoria(db, c, ng, nw, s1, s2): return "Usa la IA."
 def generar_partidos_automaticos(db): return "Usa la IA."
-def procesar_organizacion_torneo(db, m): return "Usa la IA."
+def guardar_organizacion_ia(db, l): return guardar_organizacion_experta(db, l)
