@@ -7,141 +7,191 @@ import requests
 from datetime import datetime, timedelta
 
 # ==========================================
-# 🧠 CONTEXTO (LOS OJOS DE ALEJANDRO)
+# 🧠 SISTEMA DE CLASIFICACIÓN (ZONAS)
 # ==========================================
+def obtener_zona(puntos):
+    # Definimos las zonas según los puntos (puedes ajustar esto)
+    # Para el MVP: Top 3 es Oro.
+    if puntos >= 300: return "ORO"
+    if puntos >= 200: return "PLATA"
+    return "BRONCE"
 
-def obtener_contexto_completo(db: Session):
-    """
-    Esta función le entrega a la IA el estado actual del mundo.
-    Alejandro leerá esto antes de decidir qué decir o hacer.
-    """
-    # 1. Jugadores y Ranking
-    jugadores = db.query(Jugador).order_by(Jugador.puntos.desc()).all()
-    lista_jugadores = []
-    for j in jugadores:
-        lista_jugadores.append(f"- {j.nombre} (ID: {j.id} | Puntos: {j.puntos} | Celular: {j.celular})")
-    txt_jugadores = "\n".join(lista_jugadores) if lista_jugadores else "No hay inscritos aún."
-
-    # 2. Partidos Pendientes
-    partidos = db.query(Partido).filter(Partido.estado == "pendiente").all()
-    lista_partidos = []
-    for p in partidos:
-        lista_partidos.append(f"- {p.jugador_1_nombre} vs {p.jugador_2_nombre} (Hora: {p.hora}, Cancha: {p.cancha})")
-    txt_partidos = "\n".join(lista_partidos) if lista_partidos else "No hay partidos programados."
-
-    # 3. Configuración
-    configs = db.query(Configuracion).all()
-    txt_config = "\n".join([f"- {c.key}: {c.value}" for c in configs])
-
-    return f"""
-    === ESTADO ACTUAL DEL TORNEO ===
+def calcular_puntos_bounty(ganador_pts, perdedor_pts):
+    zona_ganador = obtener_zona(ganador_pts)
+    zona_perdedor = obtener_zona(perdedor_pts)
     
-    👥 JUGADORES (RANKING):
-    {txt_jugadores}
+    # REGLA: Ganas el valor de la cabeza del rival
+    puntos_base = 15 # Valor Bronce
+    if zona_perdedor == "PLATA": puntos_base = 30
+    if zona_perdedor == "ORO": puntos_base = 50
     
-    📅 PARTIDOS PENDIENTES (PROGRAMACIÓN):
-    {txt_partidos}
-    
-    ⚙️ CONFIGURACIÓN TÉCNICA:
-    {txt_config}
-    ================================
-    """
+    return puntos_base
 
 # ==========================================
-# 🛠️ HERRAMIENTAS DE ACCIÓN
+# 📰 SALA DE PRENSA
 # ==========================================
-
 def guardar_noticia(db: Session, titulo: str, cuerpo: str, tipo: str="general"):
     try:
         db.add(Noticia(titulo=titulo, cuerpo=cuerpo, tipo=tipo))
         db.commit()
     except: pass
 
-def inscribir_jugador_tool(db: Session, nombre: str, celular: str):
-    # Verifica duplicados de nombre en el mismo celular
-    existente = db.query(Jugador).filter(Jugador.celular == celular, func.lower(Jugador.nombre) == nombre.lower()).first()
-    if existente: 
-        return f"⚠️ {nombre} ya está inscrito. No es necesario repetir."
+def obtener_contexto_completo(db: Session):
+    jugadores = db.query(Jugador).order_by(Jugador.puntos.desc()).all()
+    lista = ""
+    for i, j in enumerate(jugadores):
+        zona = obtener_zona(j.puntos)
+        lista += f"#{i+1} {j.nombre} ({j.puntos}pts - {zona})\n"
     
-    db.add(Jugador(nombre=nombre, celular=celular, puntos=100)) # Inicia con 100 pts
-    db.commit()
+    if not lista: lista = "Sin inscritos."
     
-    guardar_noticia(db, "¡NUEVO FICHAJE!", f"{nombre} se une al circuito.", "anuncio")
-    return "OK_INSCRITO"
+    # Partidos pendientes
+    pendientes = db.query(Partido).filter(Partido.estado == "pendiente").all()
+    lista_p = "\n".join([f"- {p.jugador_1_nombre} vs {p.jugador_2_nombre} ({p.hora})" for p in pendientes])
+    
+    return f"RANKING:\n{lista}\n\nPARTIDOS PENDIENTES:\n{lista_p}"
 
-def generar_fixture_tool(db: Session, lista_partidos: list):
-    """Recibe la lista de partidos pensada por la IA y la guarda"""
-    # Borramos pendientes anteriores para re-organizar
-    db.query(Partido).filter(Partido.estado == "pendiente").delete()
-    
-    creados = 0
-    for p in lista_partidos:
-        # Buscamos los objetos jugador para tener sus IDs
-        j1 = db.query(Jugador).filter(func.lower(Jugador.nombre) == p['j1_nombre'].lower()).first()
-        j2 = db.query(Jugador).filter(func.lower(Jugador.nombre) == p['j2_nombre'].lower()).first()
-        
-        if j1 and j2:
-            nuevo = Partido(
-                jugador_1_id=j1.id, jugador_1_nombre=j1.nombre,
-                jugador_2_id=j2.id, jugador_2_nombre=j2.nombre,
-                cancha=str(p.get('cancha', '1')),
-                hora=str(p.get('hora', 'Por definir')),
-                estado="pendiente"
-            )
-            db.add(nuevo)
-            creados += 1
-            
-    db.commit()
-    guardar_noticia(db, "¡PROGRAMACIÓN LISTA!", f"Se han generado {creados} partidos nuevos.", "anuncio")
-    return f"OK_FIXTURE_CREADO: {creados} partidos."
+# ==========================================
+# ⚖️ SISTEMA VAR (ARBITRAJE)
+# ==========================================
 
-def reportar_victoria_tool(db: Session, nombre_ganador: str, nombre_perdedor: str, marcador: str):
-    ganador = db.query(Jugador).filter(func.lower(Jugador.nombre) == nombre_ganador.lower()).first()
-    perdedor = db.query(Jugador).filter(func.lower(Jugador.nombre) == nombre_perdedor.lower()).first()
+def iniciar_proceso_resultado(db: Session, celular_reportante: str, nombre_ganador: str, nombre_perdedor: str, marcador: str):
+    """
+    1. Busca el partido.
+    2. Lo pone en 'esperando_confirmacion'.
+    3. Retorna los datos para que Main le escriba al rival.
+    """
+    # Buscar jugadores
+    ganador = db.query(Jugador).filter(func.lower(Jugador.nombre).contains(nombre_ganador.lower())).first()
+    perdedor = db.query(Jugador).filter(func.lower(Jugador.nombre).contains(nombre_perdedor.lower())).first()
     
-    if not ganador or not perdedor: return "ERROR: Nombres no encontrados."
-
-    # --- LÓGICA DE PUNTOS (SISTEMA BOUNTY) ---
-    # Si el perdedor tenía más puntos que el ganador (Batacazo), el premio es mayor.
-    if perdedor.puntos > ganador.puntos:
-        puntos_juego = 50 # Premio gordo
-    else:
-        puntos_juego = 15 # Premio normal
+    if not ganador or not perdedor: return {"status": "error", "msg": "No encontré esos nombres en la base de datos."}
     
-    ganador.puntos += puntos_juego
-    perdedor.puntos = max(0, perdedor.puntos - 5) # Protección: solo pierde 5
-    
-    ganador.victorias += 1
-    perdedor.derrotas += 1
-    
-    # Cerrar el partido
+    # Buscar el partido
     partido = db.query(Partido).filter(
         (Partido.estado == "pendiente"),
         (Partido.jugador_1_id.in_([ganador.id, perdedor.id])),
         (Partido.jugador_2_id.in_([ganador.id, perdedor.id]))
     ).first()
     
-    if partido:
-        partido.estado = "finalizado"
-        partido.ganador_id = ganador.id
-        partido.marcador = marcador
-    else:
-        # Si fue un reto libre (sin programación previa), lo creamos y cerramos
-        db.add(Partido(
+    if not partido:
+        # Si es un reto libre, lo creamos
+        partido = Partido(
             jugador_1_id=ganador.id, jugador_1_nombre=ganador.nombre,
             jugador_2_id=perdedor.id, jugador_2_nombre=perdedor.nombre,
-            ganador_id=ganador.id, marcador=marcador, estado="finalizado",
-            cancha="Reto", hora=datetime.now().strftime("%I:%M %p")
-        ))
+            cancha="Reto", hora=datetime.now().strftime("%I:%M %p"),
+            estado="pendiente"
+        )
+        db.add(partido)
+        db.commit()
 
-    # Noticia
-    guardar_noticia(db, "¡RESULTADO!", f"{ganador.nombre} vence a {perdedor.nombre} ({marcador}).", "partido")
+    # Actualizar estado a confirmación
+    partido.estado = "esperando_confirmacion"
+    partido.temp_ganador_id = ganador.id
+    partido.temp_reportado_por = celular_reportante
+    partido.marcador = marcador # Guardamos temporalmente
     db.commit()
-    return f"OK_VICTORIA. Puntos sumados: {puntos_juego}."
 
-def guardar_configuracion_tool(db: Session, clave: str, valor: str):
-    item = db.query(Configuracion).filter(Configuracion.key == clave).first()
-    if not item: db.add(Configuracion(key=clave, value=valor))
-    else: item.value = valor
+    # Identificar al rival (el que no reportó) para enviarle mensaje
+    rival_id = perdedor.id if ganador.celular == celular_reportante else ganador.id
+    rival = db.query(Jugador).get(rival_id)
+    
+    return {
+        "status": "waiting",
+        "msg_reportante": f"✅ Recibido. Le he escrito a **{rival.nombre}** para que confirme el resultado. Apenas responda, actualizo el ranking.",
+        "rival_celular": rival.celular,
+        "rival_nombre": rival.nombre,
+        "msg_rival": f"🚨 **CONFIRMACIÓN DE RESULTADO**\n\nTu rival dice que el partido terminó:\n\n🏆 Ganador: **{ganador.nombre}**\n📊 Marcador: {marcador}\n\n¿Es correcto? Responde **SÍ** o **NO**."
+    }
+
+def validar_resultado(db: Session, celular_confirmante: str, decision: str):
+    """
+    Procesa el SÍ o NO del rival.
+    """
+    # Buscar si hay un partido esperando confirmación para este usuario
+    jugadores_cel = db.query(Jugador).filter(Jugador.celular == celular_confirmante).all()
+    ids = [j.id for j in jugadores_cel]
+    
+    partido = db.query(Partido).filter(
+        Partido.estado == "esperando_confirmacion",
+        (Partido.jugador_1_id.in_(ids) | Partido.jugador_2_id.in_(ids))
+    ).first()
+    
+    if not partido: return "No tienes confirmaciones pendientes."
+    
+    if "si" in decision.lower() or "confirm" in decision.lower():
+        # APLICAR RESULTADO (BOUNTY)
+        ganador = db.query(Jugador).get(partido.temp_ganador_id)
+        perdedor = db.query(Jugador).get(partido.jugador_2_id if partido.jugador_1_id == ganador.id else partido.jugador_1_id)
+        
+        puntos = calcular_puntos_bounty(ganador.puntos, perdedor.puntos)
+        
+        ganador.puntos += puntos
+        perdedor.puntos = max(0, perdedor.puntos - 5) # Protección básica
+        
+        ganador.victorias += 1
+        perdedor.derrotas += 1
+        
+        partido.estado = "finalizado"
+        partido.ganador_id = ganador.id
+        
+        # Noticia
+        titulo = "¡BATACAZO!" if puntos >= 30 else "VICTORIA"
+        guardar_noticia(db, titulo, f"{ganador.nombre} vence a {perdedor.nombre}. Suma +{puntos} pts.", "partido")
+        
+        db.commit()
+        return f"✅ **¡Confirmado!** El ranking se ha actualizado.\n🏆 {ganador.nombre} (+{puntos})\n📉 {perdedor.nombre} (-5)"
+        
+    else:
+        # RECHAZADO
+        partido.estado = "pendiente" # Vuelve a estado normal
+        partido.temp_ganador_id = None
+        db.commit()
+        return "🛑 Has rechazado el resultado. El partido vuelve a estado pendiente. Pónganse de acuerdo o hablen con el Admin."
+
+# ==========================================
+# 📋 GESTIÓN Y ADMIN
+# ==========================================
+
+def inscribir_jugador(db: Session, nombre: str, celular: str):
+    existente = db.query(Jugador).filter(Jugador.celular == celular, func.lower(Jugador.nombre) == nombre.lower()).first()
+    if existente: return f"⚠️ {nombre} ya está inscrito."
+    db.add(Jugador(nombre=nombre, celular=celular, puntos=100))
     db.commit()
-    return "OK_CONFIG_GUARDADA"
+    guardar_noticia(db, "NUEVO JUGADOR", f"{nombre} entra al ranking.", "anuncio")
+    return f"✅ Inscrito: **{nombre}**."
+
+def consultar_datos(db: Session, tipo: str, celular: str):
+    if tipo == "ranking_general":
+        top = db.query(Jugador).order_by(Jugador.puntos.desc()).limit(10).all()
+        return "\n".join([f"#{i+1} {j.nombre} - {j.puntos} pts" for i,j in enumerate(top)])
+    
+    if tipo == "mis_partidos":
+        mis = db.query(Jugador).filter(Jugador.celular == celular).all()
+        ids = [p.id for p in mis]
+        parts = db.query(Partido).filter((Partido.jugador_1_id.in_(ids)) | (Partido.jugador_2_id.in_(ids)), Partido.estado == "pendiente").all()
+        if not parts: return "No tienes partidos."
+        return "\n".join([f"{p.jugador_1_nombre} vs {p.jugador_2_nombre} ({p.hora})" for p in parts])
+    
+    return "Revisa la web: https://torneo-pasto-ai.onrender.com"
+
+def gestionar_torneo_admin(db: Session, accion: str, datos: str):
+    if accion == "generar_fixture":
+        # Generador Round Robin Simple
+        jugadores = db.query(Jugador).all()
+        if len(jugadores) < 2: return "Faltan jugadores."
+        db.query(Partido).filter(Partido.estado == "pendiente").delete()
+        random.shuffle(jugadores)
+        count = 0
+        for i in range(len(jugadores)//2):
+            db.add(Partido(
+                jugador_1_id=jugadores[i*2].id, jugador_1_nombre=jugadores[i*2].nombre,
+                jugador_2_id=jugadores[i*2+1].id, jugador_2_nombre=jugadores[i*2+1].nombre,
+                hora="Por definir", cancha="1", estado="pendiente"
+            ))
+            count += 1
+        db.commit()
+        guardar_noticia(db, "PROGRAMACIÓN LISTA", f"{count} partidos generados.", "anuncio")
+        return f"✅ Fixture generado: {count} partidos."
+        
+    return "Configuración guardada."
