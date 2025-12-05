@@ -10,8 +10,8 @@ from database import SessionLocal, engine
 import models
 from ai_agent import pensar_respuesta_ia
 from logic import (
-    obtener_contexto, inscribir_usuario_logic, consultar_info_logic,
-    reportar_victoria_logic, configurar_torneo_logic
+    obtener_contexto_completo, inscribir_jugador_tool, generar_fixture_tool,
+    reportar_victoria_tool, guardar_configuracion_tool
 )
 
 models.Base.metadata.create_all(bind=engine)
@@ -30,24 +30,26 @@ def enviar_whatsapp(numero, texto):
         url = f"https://graph.facebook.com/v17.0/{phone_id}/messages"
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         
+        # Firma profesional para mensajes largos
         if len(texto) > 50: texto += "\n\n_Alejandro • Pasto.AI_"
         
         data = {"messaging_product": "whatsapp", "to": numero, "type": "text", "text": {"body": texto}}
         requests.post(url, headers=headers, json=data)
     except: pass
 
-# --- RUTAS WEB (RECUPERADAS) ---
 @app.get("/", response_class=HTMLResponse)
 def dashboard(request: Request, db: Session = Depends(get_db)):
     jugadores = db.query(models.Jugador).order_by(models.Jugador.puntos.desc()).all()
-    return templates.TemplateResponse("ranking.html", {"request": request, "jugadores": jugadores})
+    noticias = []
+    try: noticias = db.query(models.Noticia).order_by(models.Noticia.id.desc()).limit(5).all()
+    except: pass
+    return templates.TemplateResponse("ranking.html", {"request": request, "jugadores": jugadores, "noticias": noticias})
 
 @app.get("/programacion", response_class=HTMLResponse)
 def ver_programacion(request: Request, db: Session = Depends(get_db)):
     partidos = db.query(models.Partido).order_by(models.Partido.hora.asc()).all()
     return templates.TemplateResponse("partidos.html", {"request": request, "partidos": partidos})
 
-# --- WEBHOOK WHATSAPP ---
 @app.get("/webhook")
 def verificar(request: Request):
     if request.query_params.get("hub.verify_token") == os.getenv("VERIFY_TOKEN"):
@@ -67,49 +69,77 @@ async def recibir(request: Request, db: Session = Depends(get_db)):
             if msg["type"] == "text":
                 texto = msg["text"]["body"]
                 numero = msg["from"]
-                nombre_wa = value["contacts"][0]["profile"]["name"]
                 
-                # 1. OBTENER CONTEXTO
-                contexto = obtener_contexto(db)
+                # Obtener nombre de WhatsApp
+                nombre_wa = value.get("contacts", [{}])[0].get("profile", {}).get("name", "Usuario")
                 
-                # 2. CONSULTAR AL CEREBRO (IA)
+                print(f"📩 {nombre_wa}: {texto}")
+                
+                # 1. CONTEXTO
+                contexto = obtener_contexto_completo(db)
+                
+                # 2. IA DECIDE
                 decision = pensar_respuesta_ia(texto, contexto)
                 
-                respuesta = ""
+                # 3. EJECUCIÓN
+                respuesta_final = ""
                 
-                # 3. EJECUTAR DECISIÓN
                 if decision["tipo"] == "mensaje":
-                    respuesta = decision["contenido"]
+                    respuesta_final = decision["contenido"]
                 
                 elif decision["tipo"] == "accion":
-                    funcion = decision["nombre_funcion"]
-                    args = decision["argumentos"]
-                    print(f"🔧 EJECUTANDO HERRAMIENTA: {funcion} con {args}")
-                    
-                    if funcion == "inscribir_usuario":
-                        nombre = args.get("nombre")
-                        if nombre == "PERFIL_WHATSAPP": nombre = nombre_wa
-                        respuesta = inscribir_usuario_logic(db, nombre, numero)
+                    # La IA puede mandar varias acciones a la vez, iteramos
+                    for tool in decision["tool_calls"]:
+                        funcion = tool.function.name
+                        args = json.loads(tool.function.arguments)
+                        print(f"🔧 EJECUTANDO: {funcion} -> {args}")
                         
-                    elif funcion == "consultar_informacion":
-                        respuesta = consultar_info_logic(db, args.get("tipo_consulta"), numero)
+                        res_tool = ""
                         
-                    elif funcion == "reportar_victoria":
-                        respuesta = reportar_victoria_logic(db, numero, nombre_wa, args.get("sets_ganador"), args.get("sets_perdedor"))
-                        
-                    elif funcion == "configurar_torneo":
-                        # Seguridad: Solo Admin
-                        if str(numero) == str(os.getenv("ADMIN_PHONE")):
-                            respuesta = configurar_torneo_logic(db, args.get("accion"), args.get("datos_config"))
-                        else:
-                            respuesta = "❌ No tienes permisos de administrador."
-                
-                # 4. RESPONDER
-                if respuesta:
-                    enviar_whatsapp(numero, respuesta)
+                        if funcion == "inscribir_usuario":
+                            nombre = args.get("nombre")
+                            if nombre == "PERFIL_WHATSAPP": nombre = nombre_wa
+                            res_tool = inscribir_jugador_tool(db, nombre, numero)
+                            if res_tool == "OK_INSCRITO":
+                                respuesta_final = f"¡Listo! {nombre} ha quedado inscrito en el circuito. 🎾"
+                            else:
+                                respuesta_final = res_tool # Mensaje de error (ya existe)
+
+                        elif funcion == "generar_fixture":
+                            # Seguridad: Solo Admin
+                            if str(numero) == str(os.getenv("ADMIN_PHONE")):
+                                res_tool = generar_fixture_tool(db, args.get("partidos", []))
+                                respuesta_final = f"¡Entendido Jefe! He organizado el torneo.\n{res_tool}"
+                            else:
+                                respuesta_final = "❌ Solo el administrador puede organizar el torneo."
+
+                        elif funcion == "reportar_victoria":
+                            res_tool = reportar_victoria_tool(
+                                db, 
+                                args.get("nombre_ganador"), 
+                                args.get("nombre_perdedor"), 
+                                args.get("marcador", "3-0")
+                            )
+                            if "OK" in res_tool:
+                                respuesta_final = f"🔥 ¡Tremendo resultado! Victoria registrada para {args.get('nombre_ganador')}."
+                            else:
+                                respuesta_final = f"⚠️ {res_tool}"
+
+                        elif funcion == "guardar_configuracion":
+                            if str(numero) == str(os.getenv("ADMIN_PHONE")):
+                                res_tool = guardar_configuracion_tool(db, args.get("clave"), args.get("valor"))
+                                respuesta_final = "📝 Configuración actualizada."
+                            else:
+                                respuesta_final = "❌ Acceso denegado."
+                                
+                        # Si no hay respuesta definida aún
+                        if not respuesta_final: respuesta_final = "Acción procesada."
+
+                # 4. ENVIAR
+                enviar_whatsapp(numero, respuesta_final)
 
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"🔥 Error: {e}")
         traceback.print_exc()
         
     return {"status": "ok"}

@@ -6,17 +6,17 @@ from dotenv import load_dotenv
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# --- HERRAMIENTAS ---
-herramientas = [
+# --- DEFINICIÓN DE HABILIDADES (TOOLS) ---
+tools = [
     {
         "type": "function",
         "function": {
-            "name": "inscribir_usuario",
-            "description": "Inscribir a una persona.",
+            "name": "inscribir_jugador",
+            "description": "Inscribir un nuevo participante.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "nombre": {"type": "string", "description": "Nombre. Si es 'yo', usar 'PERFIL_WHATSAPP'."}
+                    "nombre": {"type": "string", "description": "Nombre real del jugador. Si dice 'yo', usar 'PERFIL_WHATSAPP'."}
                 },
                 "required": ["nombre"]
             }
@@ -25,14 +25,26 @@ herramientas = [
     {
         "type": "function",
         "function": {
-            "name": "consultar_informacion",
-            "description": "Consultar inscritos o partidos.",
+            "name": "generar_fixture",
+            "description": "Crear los partidos automáticamente basado en los inscritos.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "tipo_consulta": {"type": "string", "enum": ["inscritos", "mis_partidos"]}
+                    "partidos": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "j1_nombre": {"type": "string"},
+                                "j2_nombre": {"type": "string"},
+                                "hora": {"type": "string"},
+                                "cancha": {"type": "string"}
+                            }
+                        },
+                        "description": "Lista de partidos que tú (IA) decides crear."
+                    }
                 },
-                "required": ["tipo_consulta"]
+                "required": ["partidos"]
             }
         }
     },
@@ -40,29 +52,30 @@ herramientas = [
         "type": "function",
         "function": {
             "name": "reportar_victoria",
-            "description": "Reportar resultado.",
+            "description": "Registrar un resultado de partido.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "sets_ganador": {"type": "integer"},
-                    "sets_perdedor": {"type": "integer"}
+                    "nombre_ganador": {"type": "string"},
+                    "nombre_perdedor": {"type": "string"},
+                    "marcador": {"type": "string"}
                 },
-                "required": ["sets_ganador", "sets_perdedor"]
+                "required": ["nombre_ganador", "nombre_perdedor", "marcador"]
             }
         }
     },
     {
         "type": "function",
         "function": {
-            "name": "configurar_torneo",
-            "description": "ADMIN: Configurar datos o iniciar generación de cuadros.",
+            "name": "guardar_configuracion",
+            "description": "Guardar datos técnicos del torneo (canchas, horas, reglas).",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "accion": {"type": "string", "enum": ["configurar_datos", "iniciar_fixture"]},
-                    "datos_config": {"type": "string", "description": "Si configura datos."}
+                    "clave": {"type": "string"},
+                    "valor": {"type": "string"}
                 },
-                "required": ["accion"]
+                "required": ["clave", "valor"]
             }
         }
     }
@@ -70,13 +83,21 @@ herramientas = [
 
 def pensar_respuesta_ia(texto_usuario: str, contexto: str):
     prompt_sistema = f"""
-    Eres Alejandro, Gerente de Pasto.AI.
-    CONTEXTO: {contexto}
+    Eres ALEJANDRO, el Director Deportivo de Pasto.AI.
     
-    INSTRUCCIONES DE INTELIGENCIA:
-    1. Si el usuario confirma datos de torneo ("Sí", "Correcto", "Generar", "Dale"), ASUME que quiere "iniciar_fixture" y llama a la herramienta `configurar_torneo`.
-    2. Si da datos técnicos ("2 canchas"), llama a `configurar_torneo` con accion="configurar_datos".
-    3. Si saluda o pregunta cosas generales, responde con texto.
+    TU CONTEXTO ACTUAL:
+    {contexto}
+    
+    TU PERSONALIDAD:
+    - Humano, colombiano, profesional, estratega.
+    - NO eres un robot. Habla con fluidez.
+    - Si te preguntan algo que está en tu contexto, respóndelo con tus palabras.
+    - Si falta información para organizar (ej: no sabes cuántas canchas), PREGÚNTALE al usuario.
+    
+    TU LÓGICA DE NEGOCIO:
+    1. El Ranking es sagrado. Gana quien reta y vence.
+    2. Organizar: Si te piden organizar, revisa los inscritos en el contexto y GENERA tú mismo los cruces usando la herramienta 'generar_fixture'.
+    3. Si alguien dice "Gané", busca en el contexto contra quién jugaba y usa la herramienta 'reportar_victoria'.
     """
 
     try:
@@ -86,22 +107,26 @@ def pensar_respuesta_ia(texto_usuario: str, contexto: str):
                 {"role": "system", "content": prompt_sistema},
                 {"role": "user", "content": texto_usuario}
             ],
-            tools=herramientas,
-            tool_choice="auto",
-            temperature=0.2
+            tools=tools,
+            tool_choice="auto", 
+            temperature=0.4
         )
         
         mensaje = response.choices[0].message
         
+        # Si la IA decide usar una herramienta
         if mensaje.tool_calls:
-            tool_call = mensaje.tool_calls[0]
             return {
                 "tipo": "accion",
-                "nombre_funcion": tool_call.function.name,
-                "argumentos": json.loads(tool_call.function.arguments)
+                "tool_calls": mensaje.tool_calls
             }
         
-        return {"tipo": "mensaje", "contenido": mensaje.content}
+        # Si la IA decide hablar
+        return {
+            "tipo": "mensaje",
+            "contenido": mensaje.content
+        }
 
     except Exception as e:
-        return {"tipo": "mensaje", "contenido": "Error procesando. 🤖"}
+        print(f"Error IA: {e}")
+        return {"tipo": "mensaje", "contenido": "Dame un momento, estoy pensando... 🧠"}
