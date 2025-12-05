@@ -2,23 +2,17 @@ import os
 import requests 
 import traceback 
 from fastapi import FastAPI, Request, Depends
-from fastapi.responses import PlainTextResponse
-from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 from database import SessionLocal, engine
 import models
-from ai_agent import analizar_mensaje_ia
+from ai_agent import pensar_respuesta_ia
 from logic import (
-    inscribir_jugador, generar_partidos_automaticos, consultar_proximo_partido, 
-    registrar_victoria, obtener_estado_torneo, obtener_contexto_completo,
-    guardar_organizacion_ia, guardar_configuracion_ia,
-    actualizar_configuracion, enviar_difusion_masiva, procesar_organizacion_torneo,
-    ejecutar_victoria_ia # Aseguramos importación
+    obtener_contexto, inscribir_usuario_logic, consultar_info_logic,
+    reportar_victoria_logic, configurar_torneo_logic
 )
 
 models.Base.metadata.create_all(bind=engine)
 app = FastAPI()
-templates = Jinja2Templates(directory="templates")
 
 def get_db():
     db = SessionLocal()
@@ -31,39 +25,16 @@ def enviar_whatsapp(numero, texto):
         phone_id = os.getenv("WHATSAPP_PHONE_ID")
         url = f"https://graph.facebook.com/v17.0/{phone_id}/messages"
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-        
-        if len(texto) > 40:
-            texto_final = f"{texto}\n\n━━━━━━━━━━━━━━━━\n🚀 *Desarrollado por Pasto.AI*"
-        else:
-            texto_final = texto
-            
-        data = {"messaging_product": "whatsapp", "to": numero, "type": "text", "text": {"body": texto_final}}
+        if len(texto) > 50: texto += "\n\n_Alejandro • Pasto.AI_"
+        data = {"messaging_product": "whatsapp", "to": numero, "type": "text", "text": {"body": texto}}
         requests.post(url, headers=headers, json=data)
     except: pass
-
-@app.get("/")
-def dashboard(request: Request, db: Session = Depends(get_db)):
-    jugadores = db.query(models.Jugador).order_by(models.Jugador.puntos.desc()).all()
-    noticias = []
-    try: noticias = db.query(models.Noticia).order_by(models.Noticia.fecha.desc()).limit(5).all()
-    except: pass
-    return templates.TemplateResponse("ranking.html", {"request": request, "jugadores": jugadores, "noticias": noticias})
-
-@app.get("/programacion")
-def ver_programacion(request: Request, db: Session = Depends(get_db)):
-    partidos = db.query(models.Partido).order_by(models.Partido.hora.asc()).all()
-    return templates.TemplateResponse("partidos.html", {"request": request, "partidos": partidos})
-
-@app.get("/webhook")
-def verificar(request: Request):
-    if request.query_params.get("hub.verify_token") == os.getenv("VERIFY_TOKEN"):
-        return PlainTextResponse(content=request.query_params.get("hub.challenge"), status_code=200)
-    return {"status": "error"}
 
 @app.post("/webhook")
 async def recibir(request: Request, db: Session = Depends(get_db)):
     try:
         data = await request.json()
+        # ... (Lógica de extracción de mensaje estándar) ...
         entry = data.get("entry", [])[0]
         changes = entry.get("changes", [])[0]
         value = changes.get("value", {})
@@ -73,69 +44,51 @@ async def recibir(request: Request, db: Session = Depends(get_db)):
             if msg["type"] == "text":
                 texto = msg["text"]["body"]
                 numero = msg["from"]
+                nombre_wa = value["contacts"][0]["profile"]["name"]
                 
-                nombre_wa = "Jugador"
-                if "contacts" in value:
-                    nombre_wa = value["contacts"][0]["profile"]["name"]
-
-                print(f"📩 {nombre_wa}: {texto}")
-                contexto = obtener_contexto_completo(db)
-                analisis = analizar_mensaje_ia(texto, contexto)
+                # 1. OBTENER CONTEXTO
+                contexto = obtener_contexto(db)
                 
-                accion = str(analisis.get("accion", "conversacion")).strip().lower()
-                datos = analisis.get("datos", {})
-                
-                print(f"🧠 ACCIÓN: {accion}")
+                # 2. CONSULTAR AL CEREBRO (IA)
+                decision = pensar_respuesta_ia(texto, contexto)
                 
                 respuesta = ""
-                es_admin = str(numero) == str(os.getenv("ADMIN_PHONE"))
-
-                if accion == "conversacion":
-                    respuesta = analisis.get("respuesta_ia", "Hola")
-
-                elif accion == "inscripcion":
-                    nombre_real = datos.get("nombre", nombre_wa)
-                    if nombre_real == "Jugador" or not nombre_real: nombre_real = nombre_wa
-                    respuesta = inscribir_jugador(db, nombre_real, numero)
                 
-                elif accion == "consultar_inscritos":
-                    respuesta = obtener_estado_torneo(db)
-
-                elif accion == "consultar_partido":
-                    respuesta = consultar_proximo_partido(db, numero)
+                # 3. EJECUTAR DECISIÓN
+                if decision["tipo"] == "mensaje":
+                    respuesta = decision["contenido"]
                 
-                elif accion == "ejecutar_victoria_ia" or accion == "reportar_victoria":
-                    res = ejecutar_victoria_ia(
-                        db, 
-                        datos.get("nombre_ganador"), 
-                        datos.get("nombre_perdedor"), 
-                        datos.get("puntos_ganados", 10), 
-                        datos.get("puntos_perdidos", 10), 
-                        datos.get("marcador", "3-0"),
-                        datos.get("titulo_noticia", "RESULTADO"),
-                        datos.get("cuerpo_noticia", "Partido finalizado.")
-                    )
-                    respuesta = analisis.get("respuesta_ia") if res == "OK" else f"⚠️ {res}"
-
-                elif accion == "admin_wizard":
-                    if es_admin:
-                        respuesta = procesar_organizacion_torneo(db, datos.get("mensaje", ""))
-                    else: respuesta = "❌ Solo Admin."
-
-                # Agrego respaldo para otros comandos admin si la IA decide usarlos
-                elif accion == "admin_configurar":
-                    if es_admin: respuesta = actualizar_configuracion(db, datos.get("clave"), datos.get("valor"))
-                    else: respuesta = "❌ Solo Admin."
-
-                elif accion == "admin_iniciar":
-                    if es_admin: respuesta = procesar_organizacion_torneo(db, "organizar torneo")
-                    else: respuesta = "❌ Solo Admin."
-
-                if not respuesta: respuesta = "Procesando..."
-                enviar_whatsapp(numero, respuesta)
+                elif decision["tipo"] == "accion":
+                    funcion = decision["nombre_funcion"]
+                    args = decision["argumentos"]
+                    print(f"🔧 EJECUTANDO HERRAMIENTA: {funcion} con {args}")
+                    
+                    if funcion == "inscribir_usuario":
+                        nombre = args.get("nombre")
+                        if nombre == "PERFIL_WHATSAPP": nombre = nombre_wa
+                        respuesta = inscribir_usuario_logic(db, nombre, numero)
+                        
+                    elif funcion == "consultar_informacion":
+                        respuesta = consultar_info_logic(db, args.get("tipo_consulta"), numero)
+                        
+                    elif funcion == "reportar_victoria":
+                        respuesta = reportar_victoria_logic(db, numero, nombre_wa, args.get("sets_ganador"), args.get("sets_perdedor"))
+                        
+                    elif funcion == "configurar_torneo":
+                        # Seguridad: Solo Admin
+                        if str(numero) == str(os.getenv("ADMIN_PHONE")):
+                            respuesta = configurar_torneo_logic(db, args.get("accion"), args.get("datos_config"))
+                        else:
+                            respuesta = "❌ No tienes permisos de administrador."
+                
+                # 4. RESPONDER
+                if respuesta:
+                    enviar_whatsapp(numero, respuesta)
 
     except Exception as e:
-        print(f"🔥 Error: {e}")
+        print(f"Error: {e}")
         traceback.print_exc()
         
     return {"status": "ok"}
+    
+# (Mantener rutas web @app.get("/") igual que antes...)

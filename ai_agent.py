@@ -6,70 +6,122 @@ from dotenv import load_dotenv
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-def analizar_mensaje_ia(texto_usuario: str, contexto_completo: str):
-    prompt = f"""
-    Eres ALEJANDRO, el Gerente Deportivo de Pasto.AI.
+# --- DEFINICIÓN DE LAS HERRAMIENTAS (TOOLS) ---
+# Esto es lo que la IA "sabe hacer". No es código, es la descripción para el cerebro.
+herramientas = [
+    {
+        "type": "function",
+        "function": {
+            "name": "inscribir_usuario",
+            "description": "Inscribir a una persona en el torneo.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "nombre": {"type": "string", "description": "Nombre del jugador. Si dice 'yo', usar 'PERFIL_WHATSAPP'."}
+                },
+                "required": ["nombre"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "consultar_informacion",
+            "description": "Consultar datos del torneo: inscritos, partidos, o estado general.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tipo_consulta": {
+                        "type": "string", 
+                        "enum": ["inscritos", "mis_partidos", "estado_general"],
+                        "description": "Qué quiere saber el usuario."
+                    }
+                },
+                "required": ["tipo_consulta"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "reportar_victoria",
+            "description": "Reportar que el usuario ganó un partido.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "sets_ganador": {"type": "integer", "description": "Sets ganados (ej: 3)"},
+                    "sets_perdedor": {"type": "integer", "description": "Sets perdidos (ej: 0)"},
+                    "nombre_rival": {"type": "string", "description": "Nombre del rival si lo menciona (opcional)."}
+                },
+                "required": ["sets_ganador", "sets_perdedor"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "configurar_torneo",
+            "description": "ADMINISTRADOR SOLAMENTE. Configurar parámetros o iniciar el torneo.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "accion": {"type": "string", "enum": ["configurar_datos", "iniciar_fixture"]},
+                    "datos_config": {"type": "string", "description": "Resumen de los datos (Ej: '2 canchas, 30 min, 6pm')."}
+                },
+                "required": ["accion"]
+            }
+        }
+    }
+]
+
+def pensar_respuesta_ia(texto_usuario: str, contexto: str):
+    """
+    Envía el mensaje a OpenAI junto con las herramientas disponibles.
+    Retorna: Texto (si es charla) o Una Solicitud de Herramienta (si es acción).
+    """
+    prompt_sistema = f"""
+    Eres Alejandro, Gerente Deportivo de Pasto.AI.
+    CONTEXTO ACTUAL: {contexto}
     
-    TU CONTEXTO:
-    {contexto_completo}
+    PERSONALIDAD:
+    - Humano, colombiano, profesional, usas emojis.
+    - Si te preguntan qué eres: "Soy un Agente IA de Pasto.AI".
+    - Web: https://torneo-pasto-ai.onrender.com/
     
-    TU SUPERPODER:
-    Entender el lenguaje natural humano. NO necesitas palabras clave exactas.
-    Tu trabajo es interpretar la INTENCIÓN detrás de lo que dice el usuario, incluso si usa jerga, mala ortografía o frases largas.
-
-    INSTRUCCIONES DE INTERPRETACIÓN FLEXIBLE:
-
-    1. INTENCIÓN: INSCRIPCIÓN
-       - Si el usuario expresa deseo de participar, jugar, entrar, que lo anoten.
-       - Ejemplos variados: "Méteme al torneo", "Quiero jugar", "Agrégame ahí soy Pedro", "Cuenta conmigo".
-       - ACCIÓN: "inscripcion"
-       - DATOS: Extrae el nombre. Si dice "soy yo" o no da nombre, usa "PERFIL_WHATSAPP".
-
-    2. INTENCIÓN: CONFIGURACIÓN TÉCNICA (ADMIN)
-       - Si el usuario (Admin) te cuenta cómo es el torneo en una frase larga.
-       - Ejemplo: "Mira Alejo, vamos a jugar en 3 canchas, partidos de 40 mins y arrancamos a las 2 de la tarde".
-       - ACCIÓN: "admin_configurar_lote"
-       - DATOS: Extrae 'num_canchas', 'duracion_partido' (en minutos), 'hora_inicio'.
-
-    3. INTENCIÓN: REPORTAR RESULTADO
-       - Si el usuario comunica que ganó un partido.
-       - Ejemplos: "Les ganamos", "Gané 3-0", "Le dimos una paliza a Juan", "Ya jugamos, ganó Pedro".
-       - ACCIÓN: "reportar_victoria"
-       - DATOS: Intenta deducir el ganador y el marcador.
-
-    4. INTENCIÓN: CONSULTAS
-       - Preguntas sobre el estado del torneo.
-       - Ejemplos: "¿Quiénes van?", "¿Está lleno?", "Pásame la lista", "¿Contra quién me toca?", "¿A qué hora es mi juego?".
-       - ACCIONES: "consultar_inscritos" o "consultar_partido".
-
-    5. INTENCIÓN: ORGANIZAR (ADMIN)
-       - Solo si dice explícitamente que organices o generes los cuadros.
-       - Ejemplos: "Organiza los cuadros", "Haz el fixture", "Generar".
-       - ACCIÓN: "admin_iniciar" (o "guardar_fixture_ia" si tú decides hacerlo autónomamente).
-
-    6. INTENCIÓN: CHARLA (Todo lo demás)
-       - Saludos, agradecimientos, preguntas sobre la empresa Pasto.AI, insultos o bromas.
-       - ACCIÓN: "conversacion"
-       - RESPUESTA: Responde como un humano carismático y servicial.
-
-    OUTPUT OBLIGATORIO: JSON.
-    {{
-        "accion": "...",
-        "datos": {{ ... }},
-        "respuesta_ia": "..."
-    }}
+    TU LÓGICA:
+    - Si el usuario pide algo técnico, USA LAS HERRAMIENTAS.
+    - Si el usuario solo saluda o pregunta cosas varias, RESPONDE CON TEXTO.
     """
 
     try:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": prompt}, 
+                {"role": "system", "content": prompt_sistema},
                 {"role": "user", "content": texto_usuario}
             ],
-            temperature=0.4, # Un poco más de temperatura para entender variedad lingüística
-            response_format={ "type": "json_object" }
+            tools=herramientas,
+            tool_choice="auto", # La IA decide si usa herramienta o habla
+            temperature=0.3
         )
-        return json.loads(response.choices[0].message.content)
-    except:
-        return {"accion": "conversacion", "respuesta_ia": "Dame un momento, estoy procesando. 🤖"}
+        
+        mensaje = response.choices[0].message
+        
+        # CASO 1: La IA quiere ejecutar una herramienta (Acción)
+        if mensaje.tool_calls:
+            tool_call = mensaje.tool_calls[0]
+            return {
+                "tipo": "accion",
+                "nombre_funcion": tool_call.function.name,
+                "argumentos": json.loads(tool_call.function.arguments)
+            }
+        
+        # CASO 2: La IA quiere hablar (Conversación)
+        return {
+            "tipo": "mensaje",
+            "contenido": mensaje.content
+        }
+
+    except Exception as e:
+        print(f"Error IA: {e}")
+        return {"tipo": "mensaje", "contenido": "Estoy recalibrando. ¿Me repites? 🎾"}
