@@ -1,17 +1,18 @@
 import os
 import requests 
 import traceback 
-import json
 from fastapi import FastAPI, Request, Depends
 from fastapi.responses import PlainTextResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 from database import SessionLocal, engine
 import models
-from ai_agent import pensar_respuesta_ia
+from ai_agent import analizar_mensaje_ia
 from logic import (
-    obtener_contexto_completo, inscribir_jugador, consultar_datos,
-    iniciar_proceso_resultado, validar_resultado, gestionar_torneo_admin
+    inscribir_jugador, consultar_proximo_partido, 
+    ejecutar_victoria_ia, obtener_estado_torneo, obtener_contexto_completo,
+    guardar_organizacion_experta, guardar_configuracion_ia, # Nuevas funciones IA
+    actualizar_configuracion, enviar_difusion_masiva
 )
 
 models.Base.metadata.create_all(bind=engine)
@@ -29,7 +30,9 @@ def enviar_whatsapp(numero, texto):
         phone_id = os.getenv("WHATSAPP_PHONE_ID")
         url = f"https://graph.facebook.com/v17.0/{phone_id}/messages"
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-        if len(texto) > 50: texto += "\n\n_Alejandro • Pasto.AI_"
+        
+        if len(texto) > 40: texto += "\n\n_Alejandro • Pasto.AI_"
+        
         data = {"messaging_product": "whatsapp", "to": numero, "type": "text", "text": {"body": texto}}
         requests.post(url, headers=headers, json=data)
     except: pass
@@ -67,63 +70,72 @@ async def recibir(request: Request, db: Session = Depends(get_db)):
                 texto = msg["text"]["body"]
                 numero = msg["from"]
                 
-                # Nombre
-                nombre_wa = value.get("contacts", [{}])[0].get("profile", {}).get("name", "Usuario")
+                nombre_wa = "Jugador"
+                if "contacts" in value:
+                    nombre_wa = value["contacts"][0]["profile"]["name"]
+
                 print(f"📩 {nombre_wa}: {texto}")
                 
-                # --- CAPA 1: INTERCEPTAR SI O NO (Para validaciones rápidas) ---
-                if texto.strip().upper() in ["SI", "SÍ", "NO", "CONFIRMO", "RECHAZO"]:
-                    respuesta = validar_resultado(db, numero, texto)
-                    enviar_whatsapp(numero, respuesta)
-                    return {"status": "ok"}
-                
-                # --- CAPA 2: INTELIGENCIA ARTIFICIAL ---
+                # 1. CONTEXTO TOTAL
                 contexto = obtener_contexto_completo(db)
-                decision = pensar_respuesta_ia(texto, contexto)
+                
+                # 2. CEREBRO EXPERTO
+                analisis = analizar_mensaje_ia(texto, contexto)
+                accion = str(analisis.get("accion", "conversacion")).strip().lower()
+                datos = analisis.get("datos", {})
+                respuesta_ia = analisis.get("respuesta_ia", "")
+                
+                print(f"🧠 ACCIÓN IA: {accion}")
                 
                 respuesta = ""
-                
-                if decision["tipo"] == "mensaje":
-                    respuesta = decision["contenido"]
-                
-                elif decision["tipo"] == "accion":
-                    for tool in decision.get("tool_calls", []):
-                        funcion = tool.function.name
-                        args = json.loads(tool.function.arguments)
-                        print(f"🔧 TOOL: {funcion}")
-                        
-                        if funcion == "inscribir_jugador":
-                            nombre = args.get("nombre")
-                            if nombre == "PERFIL_WHATSAPP": nombre = nombre_wa
-                            respuesta = inscribir_jugador(db, nombre, numero)
-                            
-                        elif funcion == "consultar_datos":
-                            respuesta = consultar_datos(db, args.get("tipo"), numero)
-                            
-                        elif funcion == "iniciar_proceso_resultado":
-                            # AQUÍ OCURRE EL VAR
-                            res_var = iniciar_proceso_resultado(
-                                db, numero, 
-                                args.get("ganador_supuesto"), 
-                                args.get("perdedor_supuesto"), 
-                                args.get("marcador")
-                            )
-                            
-                            if res_var["status"] == "waiting":
-                                respuesta = res_var["msg_reportante"]
-                                # ENVIAR AL RIVAL
-                                enviar_whatsapp(res_var["rival_celular"], res_var["msg_rival"])
-                            else:
-                                respuesta = res_var["msg"] # Error
-                        
-                        elif funcion == "gestionar_torneo_admin":
-                            if str(numero) == str(os.getenv("ADMIN_PHONE")):
-                                respuesta = gestionar_torneo_admin(db, args.get("accion"), args.get("datos"))
-                            else:
-                                respuesta = "❌ Solo Admin."
+                es_admin = str(numero) == str(os.getenv("ADMIN_PHONE"))
 
-                if respuesta:
-                    enviar_whatsapp(numero, respuesta)
+                if accion == "conversacion":
+                    respuesta = respuesta_ia
+
+                elif accion == "inscripcion":
+                    n = datos.get("nombre", nombre_wa)
+                    if not n or n == "PERFIL_WHATSAPP": n = nombre_wa
+                    respuesta = inscribir_jugador(db, n, numero)
+                
+                elif accion == "guardar_config":
+                    if es_admin:
+                        respuesta = guardar_configuracion_ia(db, datos.get("clave"), datos.get("valor"))
+                    else: respuesta = "❌ Solo Admin."
+
+                elif accion == "guardar_organizacion_experta":
+                    if es_admin:
+                        # Aquí la IA ya mandó el plan maestro. Logic solo lo guarda.
+                        respuesta = guardar_organizacion_experta(db, datos.get("partidos", []))
+                    else: respuesta = "❌ Solo Admin."
+
+                elif accion == "consultar_inscritos":
+                    respuesta = obtener_estado_torneo(db)
+
+                elif accion == "consultar_partido":
+                    respuesta = consultar_proximo_partido(db, numero)
+                
+                elif accion == "reportar_victoria" or accion == "ejecutar_victoria_ia":
+                    nombre_ganador = datos.get("nombre_ganador", "")
+                    # La IA ya calculó los puntos en el JSON, se los pasamos a Logic para guardar
+                    res_db = ejecutar_victoria_ia(
+                        db, 
+                        nombre_ganador, 
+                        datos.get("nombre_perdedor", ""), 
+                        datos.get("puntos_ganados", 15), 
+                        datos.get("puntos_perdidos", 5), 
+                        datos.get("marcador", "3-0"),
+                        datos.get("titulo_noticia", "RESULTADO"),
+                        datos.get("cuerpo_noticia", "Finalizado.")
+                    )
+                    if res_db == "OK": respuesta = respuesta_ia
+                    else: respuesta = f"⚠️ {res_db}"
+
+                # ENVIAR
+                if not respuesta: respuesta = respuesta_ia
+                if not respuesta: respuesta = "Procesando solicitud..."
+                
+                enviar_whatsapp(numero, respuesta)
 
     except Exception as e:
         print(f"🔥 Error: {e}")
