@@ -1,7 +1,10 @@
 import os
 import requests 
 import traceback 
+import json
 from fastapi import FastAPI, Request, Depends
+from fastapi.responses import PlainTextResponse, HTMLResponse
+from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 from database import SessionLocal, engine
 import models
@@ -13,6 +16,7 @@ from logic import (
 
 models.Base.metadata.create_all(bind=engine)
 app = FastAPI()
+templates = Jinja2Templates(directory="templates")
 
 def get_db():
     db = SessionLocal()
@@ -25,16 +29,35 @@ def enviar_whatsapp(numero, texto):
         phone_id = os.getenv("WHATSAPP_PHONE_ID")
         url = f"https://graph.facebook.com/v17.0/{phone_id}/messages"
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        
         if len(texto) > 50: texto += "\n\n_Alejandro • Pasto.AI_"
+        
         data = {"messaging_product": "whatsapp", "to": numero, "type": "text", "text": {"body": texto}}
         requests.post(url, headers=headers, json=data)
     except: pass
+
+# --- RUTAS WEB (RECUPERADAS) ---
+@app.get("/", response_class=HTMLResponse)
+def dashboard(request: Request, db: Session = Depends(get_db)):
+    jugadores = db.query(models.Jugador).order_by(models.Jugador.puntos.desc()).all()
+    return templates.TemplateResponse("ranking.html", {"request": request, "jugadores": jugadores})
+
+@app.get("/programacion", response_class=HTMLResponse)
+def ver_programacion(request: Request, db: Session = Depends(get_db)):
+    partidos = db.query(models.Partido).order_by(models.Partido.hora.asc()).all()
+    return templates.TemplateResponse("partidos.html", {"request": request, "partidos": partidos})
+
+# --- WEBHOOK WHATSAPP ---
+@app.get("/webhook")
+def verificar(request: Request):
+    if request.query_params.get("hub.verify_token") == os.getenv("VERIFY_TOKEN"):
+        return PlainTextResponse(content=request.query_params.get("hub.challenge"), status_code=200)
+    return {"status": "error"}
 
 @app.post("/webhook")
 async def recibir(request: Request, db: Session = Depends(get_db)):
     try:
         data = await request.json()
-        # ... (Lógica de extracción de mensaje estándar) ...
         entry = data.get("entry", [])[0]
         changes = entry.get("changes", [])[0]
         value = changes.get("value", {})
@@ -90,5 +113,3 @@ async def recibir(request: Request, db: Session = Depends(get_db)):
         traceback.print_exc()
         
     return {"status": "ok"}
-    
-# (Mantener rutas web @app.get("/") igual que antes...)

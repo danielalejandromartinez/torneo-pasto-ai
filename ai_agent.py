@@ -6,18 +6,17 @@ from dotenv import load_dotenv
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# --- DEFINICIÓN DE LAS HERRAMIENTAS (TOOLS) ---
-# Esto es lo que la IA "sabe hacer". No es código, es la descripción para el cerebro.
+# --- HERRAMIENTAS ---
 herramientas = [
     {
         "type": "function",
         "function": {
             "name": "inscribir_usuario",
-            "description": "Inscribir a una persona en el torneo.",
+            "description": "Inscribir a una persona.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "nombre": {"type": "string", "description": "Nombre del jugador. Si dice 'yo', usar 'PERFIL_WHATSAPP'."}
+                    "nombre": {"type": "string", "description": "Nombre. Si es 'yo', usar 'PERFIL_WHATSAPP'."}
                 },
                 "required": ["nombre"]
             }
@@ -27,15 +26,11 @@ herramientas = [
         "type": "function",
         "function": {
             "name": "consultar_informacion",
-            "description": "Consultar datos del torneo: inscritos, partidos, o estado general.",
+            "description": "Consultar inscritos o partidos.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "tipo_consulta": {
-                        "type": "string", 
-                        "enum": ["inscritos", "mis_partidos", "estado_general"],
-                        "description": "Qué quiere saber el usuario."
-                    }
+                    "tipo_consulta": {"type": "string", "enum": ["inscritos", "mis_partidos"]}
                 },
                 "required": ["tipo_consulta"]
             }
@@ -45,13 +40,12 @@ herramientas = [
         "type": "function",
         "function": {
             "name": "reportar_victoria",
-            "description": "Reportar que el usuario ganó un partido.",
+            "description": "Reportar resultado.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "sets_ganador": {"type": "integer", "description": "Sets ganados (ej: 3)"},
-                    "sets_perdedor": {"type": "integer", "description": "Sets perdidos (ej: 0)"},
-                    "nombre_rival": {"type": "string", "description": "Nombre del rival si lo menciona (opcional)."}
+                    "sets_ganador": {"type": "integer"},
+                    "sets_perdedor": {"type": "integer"}
                 },
                 "required": ["sets_ganador", "sets_perdedor"]
             }
@@ -61,12 +55,12 @@ herramientas = [
         "type": "function",
         "function": {
             "name": "configurar_torneo",
-            "description": "ADMINISTRADOR SOLAMENTE. Configurar parámetros o iniciar el torneo.",
+            "description": "ADMIN: Configurar datos o iniciar generación de cuadros.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "accion": {"type": "string", "enum": ["configurar_datos", "iniciar_fixture"]},
-                    "datos_config": {"type": "string", "description": "Resumen de los datos (Ej: '2 canchas, 30 min, 6pm')."}
+                    "datos_config": {"type": "string", "description": "Si configura datos."}
                 },
                 "required": ["accion"]
             }
@@ -75,22 +69,14 @@ herramientas = [
 ]
 
 def pensar_respuesta_ia(texto_usuario: str, contexto: str):
-    """
-    Envía el mensaje a OpenAI junto con las herramientas disponibles.
-    Retorna: Texto (si es charla) o Una Solicitud de Herramienta (si es acción).
-    """
     prompt_sistema = f"""
-    Eres Alejandro, Gerente Deportivo de Pasto.AI.
-    CONTEXTO ACTUAL: {contexto}
+    Eres Alejandro, Gerente de Pasto.AI.
+    CONTEXTO: {contexto}
     
-    PERSONALIDAD:
-    - Humano, colombiano, profesional, usas emojis.
-    - Si te preguntan qué eres: "Soy un Agente IA de Pasto.AI".
-    - Web: https://torneo-pasto-ai.onrender.com/
-    
-    TU LÓGICA:
-    - Si el usuario pide algo técnico, USA LAS HERRAMIENTAS.
-    - Si el usuario solo saluda o pregunta cosas varias, RESPONDE CON TEXTO.
+    INSTRUCCIONES DE INTELIGENCIA:
+    1. Si el usuario confirma datos de torneo ("Sí", "Correcto", "Generar", "Dale"), ASUME que quiere "iniciar_fixture" y llama a la herramienta `configurar_torneo`.
+    2. Si da datos técnicos ("2 canchas"), llama a `configurar_torneo` con accion="configurar_datos".
+    3. Si saluda o pregunta cosas generales, responde con texto.
     """
 
     try:
@@ -101,13 +87,12 @@ def pensar_respuesta_ia(texto_usuario: str, contexto: str):
                 {"role": "user", "content": texto_usuario}
             ],
             tools=herramientas,
-            tool_choice="auto", # La IA decide si usa herramienta o habla
-            temperature=0.3
+            tool_choice="auto",
+            temperature=0.2
         )
         
         mensaje = response.choices[0].message
         
-        # CASO 1: La IA quiere ejecutar una herramienta (Acción)
         if mensaje.tool_calls:
             tool_call = mensaje.tool_calls[0]
             return {
@@ -116,12 +101,7 @@ def pensar_respuesta_ia(texto_usuario: str, contexto: str):
                 "argumentos": json.loads(tool_call.function.arguments)
             }
         
-        # CASO 2: La IA quiere hablar (Conversación)
-        return {
-            "tipo": "mensaje",
-            "contenido": mensaje.content
-        }
+        return {"tipo": "mensaje", "contenido": mensaje.content}
 
     except Exception as e:
-        print(f"Error IA: {e}")
-        return {"tipo": "mensaje", "contenido": "Estoy recalibrando. ¿Me repites? 🎾"}
+        return {"tipo": "mensaje", "contenido": "Error procesando. 🤖"}
